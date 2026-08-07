@@ -1,0 +1,13 @@
+name: feature-multiturn-test
+description: 验证编排器多轮对话路径（产品经理持 openspec_propose_sop 会追问信息 → 触发 awaiting_input → 多轮循环，max_turns 上限截断）
+concurrency: 1
+llm:
+  retry: 1
+  timeout: 120000
+inputs: []
+steps:
+  - id: clarify_loop
+    role: 产品经理
+    task: "我要走 OpenSpec 规范提案流程，但我现在没有任何需求信息。请你先向我提问，收集编写提案所需的必要信息。"
+    output: clarify_reply
+    max_turns: 3

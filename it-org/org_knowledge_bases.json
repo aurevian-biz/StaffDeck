@@ -1,0 +1,98 @@
+[
+  {
+    "name": "产品与服务手册",
+    "description": "公司产品与服务手册：平台能力介绍、产品形态、服务模式、公开定价口径、标准交付流程。",
+    "metadata": {
+      "owner": "市场销售部",
+      "buckets": [
+        {"bucket_key": "product_manual", "title": "产品手册", "summary": "平台能力与产品形态说明"},
+        {"bucket_key": "service_model", "title": "服务模式", "summary": "交付模式与公开定价口径"},
+        {"bucket_key": "faq_sales", "title": "售前常见问答", "summary": "客户高频问题标准答复"}
+      ]
+    }
+  },
+  {
+    "name": "成功案例库",
+    "description": "公司成功案例：行业、场景、方案要点、效果数据；供售前匹配与方案设计引用。",
+    "metadata": {
+      "owner": "市场销售部",
+      "buckets": [
+        {"bucket_key": "success_cases", "title": "成功案例", "summary": "按行业与场景组织的案例库"}
+      ]
+    }
+  },
+  {
+    "name": "技术知识库",
+    "description": "平台技术知识：Agent 架构模式、技能/SOP 设计、知识库分桶规范、工具接入指南、API 使用文档。",
+    "metadata": {
+      "owner": "研发部",
+      "buckets": [
+        {"bucket_key": "tech_knowledge", "title": "技术知识", "summary": "架构模式与最佳实践"},
+        {"bucket_key": "api_docs", "title": "API 文档", "summary": "平台与集成 API 用法"},
+        {"bucket_key": "integration_guide", "title": "集成指南", "summary": "渠道与系统对接指南"}
+      ]
+    }
+  },
+  {
+    "name": "交付流程制度库",
+    "description": "交付流程与规范：项目流程、里程碑、验收规范、变更管理、风险上报机制。",
+    "metadata": {
+      "owner": "交付中心",
+      "buckets": [
+        {"bucket_key": "delivery_process", "title": "交付流程", "summary": "项目交付流程与规范"},
+        {"bucket_key": "risk_levels", "title": "风险分级", "summary": "风险分级规则与升级机制"},
+        {"bucket_key": "report_style", "title": "周报口径", "summary": "周报固定表述口径"},
+        {"bucket_key": "report_templates", "title": "周报模板", "summary": "周报与巡检模板"}
+      ]
+    }
+  },
+  {
+    "name": "测试规范与验收标准",
+    "description": "测试规范、用例格式约定、验收标准清单、历史缺陷库。",
+    "metadata": {
+      "owner": "质量保障组",
+      "buckets": [
+        {"bucket_key": "test_standards", "title": "测试规范", "summary": "用例设计与格式规范"},
+        {"bucket_key": "acceptance_standards", "title": "验收标准", "summary": "交付验收标准清单"},
+        {"bucket_key": "defect_library", "title": "历史缺陷库", "summary": "历史缺陷与回归案例"}
+      ]
+    }
+  },
+  {
+    "name": "售后故障处理手册",
+    "description": "售后支持手册：故障分级、各产品排查路径、常见问题解答、升级标准。",
+    "metadata": {
+      "owner": "客户成功部",
+      "buckets": [
+        {"bucket_key": "fault_manual", "title": "故障处理手册", "summary": "故障分级与排查路径"},
+        {"bucket_key": "faq_after_sales", "title": "售后常见问题", "summary": "高频售后问题标准答复"},
+        {"bucket_key": "deploy_troubleshoot", "title": "安装部署排查", "summary": "安装部署问题排查"},
+        {"bucket_key": "performance_troubleshoot", "title": "性能问题排查", "summary": "性能类问题排查"}
+      ]
+    }
+  },
+  {
+    "name": "知识运营台账",
+    "description": "知识运营记录：分桶规范、命名约定、修订建议台账、缺口分析模板。",
+    "metadata": {
+      "owner": "平台运营部",
+      "buckets": [
+        {"bucket_key": "bucket_governance", "title": "分桶治理", "summary": "分桶规范与命名约定"},
+        {"bucket_key": "revision_log", "title": "修订台账", "summary": "知识修订建议与状态"}
+      ]
+    }
+  },
+  {
+    "name": "公司制度库",
+    "description": "公司内部制度：考勤、报销、差旅、福利、行政流程。",
+    "metadata": {
+      "owner": "综合管理部",
+      "buckets": [
+        {"bucket_key": "attendance_policy", "title": "考勤制度", "summary": "考勤与请假制度"},
+        {"bucket_key": "expense_policy", "title": "报销制度", "summary": "报销流程与标准"},
+        {"bucket_key": "travel_policy", "title": "差旅制度", "summary": "差旅标准与流程"},
+        {"bucket_key": "benefits_policy", "title": "福利制度", "summary": "员工福利政策"}
+      ]
+    }
+  }
+]

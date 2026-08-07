@@ -1,0 +1,26 @@
+{
+  "meta": {
+    "org_name": "IT 智能体企业数字员工组织",
+    "description": "面向软件开发 + 企业定制智能体交付企业的 StaffDeck 数字员工组织配置。包含 1 个开放广场整体智能体 + 8 个业务岗位员工，以及 SOP 技能、通用技能、知识库、工具与资源绑定清单。",
+    "base_url": "http://127.0.0.1:5173",
+    "tenant_id": "tenant_demo",
+    "admin_username": "admin",
+    "admin_password": "admin",
+    "import_order": [
+      "knowledge_bases",
+      "tools",
+      "general_skills",
+      "skills",
+      "agents",
+      "bindings"
+    ]
+  },
+  "files": {
+    "agents": "org_agents.json",
+    "skills": "org_skills.json",
+    "general_skills": "org_general_skills.json",
+    "tools": "org_tools.json",
+    "knowledge_bases": "org_knowledge_bases.json",
+    "bindings": "org_bindings.json"
+  }
+}

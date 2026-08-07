@@ -1,0 +1,327 @@
+# SDLC + OpenCode 融合流水线 —— agency-orchestrator (AO) schema 兼容定义
+# 执行器：it-org/staffdeck_orchestrator.py（把每个 step 派给 StaffDeck 数字员工）
+#
+# 融合 OpenCode 工作流 6 阶段（Discovery → Spec → Plan → Execute → Quality → Release → Closure）
+# 与 StaffDeck SDLC 20 员工流水线。
+#
+# 兼容字段（AO 标准）：
+#   workflow: name / agents_dir / llm / concurrency / inputs
+#   step:     id / role / task / output / depends_on / depends_on_mode /
+#             condition / type(approval|human_input) / prompt / loop
+# 扩展字段（adapter 专用，AO 引擎会忽略，若切回 AO 需删除）：
+#   extract: reply(默认) | trace —— step 结束后提取什么存进 output 变量
+#   max_turns: 单会话最多轮数（SOP 采集信息需要多轮对话时用）
+#
+# role 字段 = StaffDeck 数字员工姓名（见 org_agents.json，SD-000~019）
+# 通用技能绑定：见 org_bindings.json（ce-ideate, ce-strategy, ce-brainstorm 等）
+
+name: sdlc-opencode-pipeline
+agents_dir: ./it-org
+llm:
+  provider: staffdeck        # 扩展：执行器不是 LLM，是 StaffDeck 数字员工
+  retry: 3
+  timeout: 300000            # 单次 turn 等待上限(ms)
+concurrency: 2               # 同层并行员工数
+inputs:
+  - name: project_name
+    default: 智能客服Agent系统  # 项目名称
+  - name: requirements
+    default: 构建企业客服智能体：多轮对话、知识库问答、工单转人工、后台会话管理  # 需求背景
+  - name: include_ai
+    default: "true"  # 是否含 AI/智能体专项模块
+  - name: include_perf
+    default: "false"  # 是否执行性能基准测试
+  - name: external_release
+    default: "true"  # 是否对外发布（决定是否走渗透测试）
+  - name: skip_discovery
+    default: "false"  # 是否跳过发现阶段（需求已明确时）
+steps:
+  - id: discovery_ideate
+    role: 产品经理
+    task: |-
+      项目：{{project_name}}
+      需求背景：{{requirements}}
+      请使用 ce-ideate 通用技能生成改进想法：分析当前需求背景，识别可改进方向，
+      生成 5-10 个具体想法并按影响力评分排序。输出想法清单。
+    output: ideation_output
+    condition: "{{skip_discovery}} == false"
+  - id: discovery_strategy
+    role: 产品经理
+    task: |-
+      项目：{{project_name}}
+      需求背景：{{requirements}}
+      想法清单：{{ideation_output}}
+      请使用 ce-strategy 通用技能定义产品方向：目标问题、目标用户、核心方案、
+      关键指标、工作轨道。输出 STRATEGY.md 格式的策略文档。
+    output: strategy_output
+    depends_on: [discovery_ideate]
+    condition: "{{skip_discovery}} == false"
+  - id: discovery_brainstorm
+    role: 产品经理
+    task: |-
+      项目：{{project_name}}
+      需求背景：{{requirements}}
+      策略文档：{{strategy_output}}
+      请使用 ce-brainstorm 通用技能探索需求：与用户对话澄清需求边界，
+      输出需求文档（Requirements Doc），包含问题陈述、目标、验收标准、范围边界。
+    output: brainstorm_output
+    depends_on: [discovery_strategy]
+    condition: "{{skip_discovery}} == false"
+  - id: product_prd
+    role: 产品经理
+    task: |-
+      项目：{{project_name}}
+      需求背景：{{requirements}}
+      策略文档：{{strategy_output}}
+      脑暴输出：{{brainstorm_output}}
+      请按产品管理工作流程产出 PRD：目标用户与核心场景、功能清单与优先级、
+      验收指标、里程碑与排期、风险与依赖。输出完整 PRD 文档。
+    output: prd
+    depends_on: [discovery_brainstorm]
+  - id: openspec_proposal
+    role: 产品经理
+    task: |-
+      项目：{{project_name}}
+      PRD 摘要：{{prd}}
+      请使用 openspec_propose_sop 技能将 PRD 转化为 OpenSpec 规范提案：
+      1) 收集需求上下文与成功指标
+      2) 将需求拆解为可验证的 WHEN/THEN 场景
+      3) 撰写 proposal.md（含 SHALL/SHOULD/MAY 措辞的 Requirement）
+      4) 干系人评审门禁
+      输出 proposal.md 文档。
+    output: openspec_proposal_output
+    depends_on: [product_prd]
+  - id: solution_architect
+    role: 方案架构师
+    task: |-
+      项目：{{project_name}}
+      PRD 摘要：{{prd}}
+      OpenSpec 提案：{{openspec_proposal_output}}
+      请按智能体方案设计流程产出总体技术方案：需求拆解、Agent 架构、
+      技能/知识/工具规划、实施计划、风险清单。
+    output: solution
+    depends_on: [openspec_proposal]
+  - id: backend_architect
+    role: 后端架构师
+    task: |-
+      项目：{{project_name}}
+      PRD 摘要：{{prd}}
+      OpenSpec 提案：{{openspec_proposal_output}}
+      请按后端架构流程产出后端设计：模块划分、数据库模型、API 契约、
+      技术选型与风险清单。
+    output: backend_design
+    depends_on: [openspec_proposal]
+  - id: frontend_architect
+    role: 前端开发工程师
+    task: |-
+      项目：{{project_name}}
+      PRD 摘要：{{prd}}
+      OpenSpec 提案：{{openspec_proposal_output}}
+      请按前端工作流程产出前端方案：工程架构、组件划分、页面结构、
+      与后端 API 的对接点。
+    output: frontend_design
+    depends_on: [openspec_proposal]
+  - id: security_architect
+    role: 安全架构师
+    task: |-
+      项目：{{project_name}}
+      PRD 摘要：{{prd}}
+      OpenSpec 提案：{{openspec_proposal_output}}
+      请按安全架构流程完成威胁建模：资产清单、攻击面分析、
+      安全设计评审意见与加固建议。
+    output: security_design
+    depends_on: [openspec_proposal]
+  - id: openspec_design
+    role: 方案架构师
+    task: |-
+      项目：{{project_name}}
+      OpenSpec 提案：{{openspec_proposal_output}}
+      总体方案：{{solution}}
+      后端设计：{{backend_design}}
+      前端设计：{{frontend_design}}
+      安全设计：{{security_design}}
+      请使用 openspec_design_sop 技能将规范提案转化为设计文档：
+      1) 审阅 proposal.md 规范
+      2) 设计技术方案（架构/数据/接口）
+      3) 撰写 design.md 与 tasks.md
+      4) 使用 ce-doc-review 技能审查文档质量
+      输出 design.md 和 tasks.md。
+    output: openspec_design_output
+    depends_on: [solution_architect, backend_architect, frontend_architect, security_architect]
+  - id: architecture_approval
+    type: approval
+    prompt: |-
+      架构评审门禁。请确认：
+      1) PRD 与四个架构方案（总体/后端/前端/安全）是否符合预期
+      2) OpenSpec 设计文档（design.md/tasks.md）是否完整
+      输入 y 放行进入编码阶段；输入 n 将中止流水线。
+    depends_on: [openspec_design]
+  - id: implementation_plan
+    role: 方案架构师
+    task: |-
+      项目：{{project_name}}
+      总体方案：{{solution}}
+      OpenSpec 设计：{{openspec_design_output}}
+      请使用 ce-plan 通用技能制定详细实施计划：
+      1) 分解为 bite-sized 任务
+      2) 每个任务标注 TDD 步骤（RED→GREEN→REFACTOR）
+      3) 确定并行执行机会
+      4) 输出实施计划文档
+      输出 .omo/plans/<feature>-plan.md 格式的计划。
+    output: impl_plan
+    depends_on: [architecture_approval]
+  - id: software_dev
+    role: 软件工程师
+    task: |-
+      项目：{{project_name}}
+      总体方案：{{solution}}
+      后端设计：{{backend_design}}
+      前端设计：{{frontend_design}}
+      实施计划：{{impl_plan}}
+      请按编码实现交付流程处理，严格遵循 TDD 工作流：
+      1) 先澄清任务与验收标准
+      2) 为每个任务写 FAILING 测试（RED）
+      3) 实现最小代码使测试通过（GREEN）
+      4) 重构（REFACTOR）
+      5) 重点完成非 AI 业务模块
+    output: code
+    max_turns: 6
+    depends_on: [implementation_plan]
+  - id: ai_dev
+    role: AI 应用工程师
+    task: |-
+      项目：{{project_name}}
+      总体方案：{{solution}}
+      实施计划：{{impl_plan}}
+      请按 AI 应用工程流程处理，严格遵循 TDD 工作流：
+      1) 问题定义与数据审计
+      2) 为关键路径写 FAILING 测试（RED）
+      3) 实验迭代，实现代码（GREEN）
+      4) 工程化与部署设计
+      5) 重点完成 RAG/Agent 编排/Prompt 调优部分
+    output: ai_code
+    max_turns: 6
+    depends_on: [implementation_plan]
+    condition: "{{include_ai}} == true"
+  - id: devops_setup
+    role: DevOps 自动化工程师
+    task: |-
+      项目：{{project_name}}
+      总体方案：{{solution}}
+      实施计划：{{impl_plan}}
+      请按 DevOps 自动化流程设计 CI/CD：构建、测试、部署流水线，
+      环境管理与发布策略。确保流水线集成 TDD 测试步骤。
+    output: devops_plan
+    depends_on: [implementation_plan]
+  - id: code_review
+    role: 代码审查专家
+    task: |-
+      项目：{{project_name}}
+      待审查代码与实现说明：{{code}}
+      AI 模块实现：{{ai_code}}
+      请使用 ce-code-review 通用技能进行结构化代码审查：
+      1) 按正确性/安全性/可维护性/性能逐项审查
+      2) 用 🔴 阻塞项、🟡 建议项、💭 小改进分级标注
+      3) 每条给出具体位置、原因和修改建议
+      4) 区分事实与观点
+      输出审查报告。
+    output: review_report
+    depends_on: [software_dev, ai_dev]
+  - id: api_test
+    role: API 测试工程师
+    task: |-
+      项目：{{project_name}}
+      接口契约（后端设计）：{{backend_design}}
+      审查报告：{{review_report}}
+      请按 API 测试流程设计接口测试策略：覆盖场景、测试用例、自动化方案、监控改进。
+    output: api_test_plan
+    depends_on: [code_review]
+  - id: acceptance_test
+    role: 测试验收专员
+    task: |-
+      项目：{{project_name}}
+      PRD 摘要：{{prd}}
+      审查报告：{{review_report}}
+      请按测试用例生成与验收清单流程产出：功能测试用例（含边界与异常）、
+      验收清单、缺陷归类说明。
+    output: test_plan
+    depends_on: [code_review]
+  - id: performance_test
+    role: 性能基准工程师
+    task: |-
+      项目：{{project_name}}
+      测试计划：{{test_plan}}
+      请按性能基准流程产出：基准基线、压测场景、执行分析方法、性能报告模板。
+    output: perf_plan
+    depends_on: [api_test, acceptance_test]
+    condition: "{{include_perf}} == true"
+  - id: pentest
+    role: 渗透测试工程师
+    task: |-
+      项目：{{project_name}}
+      安全设计：{{security_design}}
+      API 测试计划：{{api_test_plan}}
+      请按渗透测试流程产出：授权范围确认、攻击面测绘、测试用例、
+      报告模板与风险分级。
+    output: pentest_plan
+    depends_on: [api_test, acceptance_test]
+    condition: "{{external_release}} == true"
+  - id: release_approval
+    type: approval
+    prompt: |-
+      发布审批门禁。质量保障结果：
+      代码审查：{{review_report}}
+      API 测试：{{api_test_plan}}
+      验收清单：{{test_plan}}
+      输入 y 放行进入交付收尾；输入 n 中止。
+    depends_on: [api_test, acceptance_test, performance_test, pentest]
+  - id: commit_push_pr
+    role: 软件工程师
+    task: |-
+      项目：{{project_name}}
+      代码实现：{{code}}
+      AI 模块：{{ai_code}}
+      测试计划：{{test_plan}}
+      请使用 ce-commit-push-pr 通用技能完成发布：
+      1) 使用 ce-commit 技能创建规范 commit message
+      2) 推送代码到远程仓库
+      3) 自动创建 PR（含描述）
+      4) 记录 PR 链接
+      输出发布结果。
+    output: release_output
+    depends_on: [release_approval]
+  - id: delivery_summary
+    role: 交付项目经理
+    task: |-
+      项目：{{project_name}}
+      各阶段交付物：PRD={{prd}}；方案={{solution}}；代码={{code}}；
+      测试={{test_plan}}；审查={{review_report}}
+      发布结果：{{release_output}}
+      请按项目风险巡检与周报口径汇总项目状态：进度、风险、遗留问题、
+      下一步计划，输出交付总结。
+    output: delivery_report
+    depends_on: [commit_push_pr]
+  - id: knowledge_compound
+    role: 知识运营专员
+    task: |-
+      项目：{{project_name}}
+      交付总结：{{delivery_report}}
+      请使用 ce-compound 通用技能沉淀经验：
+      1) 识别本次项目中解决的技术问题
+      2) 提炼可复用的模式和踩坑记录
+      3) 输出到 docs/solutions/ 目录
+      4) 带 YAML frontmatter 可搜索
+      输出知识沉淀文档。
+    output: compound_output
+    depends_on: [delivery_summary]
+  - id: knowledge_sediment
+    role: 知识运营专员
+    task: |-
+      项目：{{project_name}}
+      知识沉淀：{{compound_output}}
+      交付总结：{{delivery_report}}
+      请按知识沉淀流程：使用 ce-compound-refresh 技能刷新过期文档，
+      识别本次项目的可复用经验与踩坑记录，
+      输出知识库/SOP 修订建议清单。
+    output: knowledge_notes
+    depends_on: [knowledge_compound]

@@ -1,0 +1,3341 @@
+[
+  {
+    "content": {
+      "skill_id": "customer_intake_sop",
+      "name": "客户咨询接待流程",
+      "version": "1.0.0",
+      "business_domain": "pre_sales",
+      "description": "售前客户咨询接待：识别意图、澄清需求、匹配案例、记录线索，超边界转人工销售。",
+      "trigger_intents": [
+        "咨询",
+        "了解产品",
+        "想要案例",
+        "询价",
+        "定制智能体",
+        "合作"
+      ],
+      "user_utterance_examples": [
+        "你们能做什么",
+        "想了解一下智能体开发",
+        "有类似案例吗",
+        "这个项目大概多少钱"
+      ],
+      "goal": [
+        "识别客户意图",
+        "澄清行业场景与预算",
+        "匹配产品与案例",
+        "记录线索",
+        "超出边界转人工"
+      ],
+      "required_info": [
+        "industry",
+        "business_scenario"
+      ],
+      "slot_filling_policy": {
+        "enabled": true,
+        "multi_slot_per_turn": true,
+        "extract_scope": "all_skill_expected_user_info",
+        "skip_satisfied_steps": true,
+        "description": "每轮同时抽取客户行业、业务场景、预算范围与联系方式，已满足的信息不再追问。",
+        "target_info": [
+          "intent",
+          "industry",
+          "business_scenario",
+          "budget_range",
+          "contact_info"
+        ]
+      },
+      "nodes": [
+        {
+          "node_id": "identify_intent",
+          "name": "识别客户意图",
+          "instruction": "将本步骤作为目标而不是固定话术；判断客户意图：了解产品/索取案例/询价/技术咨询/其他；如客户意图已明确则直接进入下一环节，不重复询问。",
+          "expected_user_info": [
+            "intent"
+          ],
+          "allowed_actions": [
+            "ask_clarification",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "clarify_need",
+          "name": "澄清行业与场景",
+          "instruction": "收集客户的行业、业务场景与预算范围；如客户已描述场景则提取并推进；预算未透露时以范围提问（如小几十万/百万级/未定），不强求具体数字。",
+          "expected_user_info": [
+            "industry",
+            "business_scenario",
+            "budget_range"
+          ],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "match_case",
+          "name": "匹配产品与案例",
+          "instruction": "根据行业与场景从产品手册与成功案例知识库检索匹配方案；先给 1-2 个最相关案例简介再说明适用性；不承诺价格与工期。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "knowledge_query",
+            "continue_flow",
+            "answer_user"
+          ],
+          "knowledge_scope": {
+            "buckets": [
+              "product_manual",
+              "success_cases"
+            ]
+          }
+        },
+        {
+          "node_id": "record_lead",
+          "name": "记录销售线索",
+          "instruction": "确认客户有进一步意向时，收集联系方式（电话/微信/邮箱）与公司名，调用 CRM 工具登记线索；客户拒绝留资则标记为仅咨询不登记。",
+          "expected_user_info": [
+            "company_name",
+            "contact_info"
+          ],
+          "allowed_actions": [
+            "ask_user",
+            "call_tool:crm.lead.register",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "handoff_gate",
+          "name": "转人工边界判断",
+          "instruction": "遇到以下情况转人工销售并带齐上下文：明确要求报价单/合同/商务条款、需求超出产品范围需定制评估、客户要求与销售面谈。否则给出总结并结束。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "handoff_human",
+            "answer_user",
+            "continue_flow"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "source_node_id": "identify_intent",
+          "next_node_id": "clarify_need",
+          "priority": 0,
+          "label": "意图已识别"
+        },
+        {
+          "source_node_id": "clarify_need",
+          "next_node_id": "match_case",
+          "priority": 0,
+          "label": "场景已澄清"
+        },
+        {
+          "source_node_id": "match_case",
+          "next_node_id": "record_lead",
+          "priority": 0,
+          "label": "客户有进一步意向"
+        },
+        {
+          "source_node_id": "record_lead",
+          "next_node_id": "handoff_gate",
+          "priority": 0,
+          "label": "线索已登记"
+        }
+      ],
+      "start_node_id": "identify_intent",
+      "terminal_node_ids": [
+        "handoff_gate"
+      ],
+      "interruption_policy": {
+        "related_question": "可以临时回答，回答后回到当前接待流程。",
+        "unrelated_business": "可以切换到新技能，并保存当前流程进度。",
+        "chitchat": "简短回应后，引导客户继续咨询。",
+        "user_wants_human": "直接转人工销售。"
+      },
+      "response_rules": [
+        "不要承诺具体价格与工期。",
+        "案例推荐必须有知识库来源。",
+        "转人工时必须带齐行业、场景、预算与联系方式。",
+        "客户明确要求销售介入时立即转人工。"
+      ]
+    },
+    "status": "published"
+  },
+  {
+    "content": {
+      "skill_id": "solution_design_sop",
+      "name": "智能体方案设计流程",
+      "version": "1.0.0",
+      "business_domain": "delivery",
+      "description": "定制智能体项目方案设计：需求拆解、Agent 架构规划、技能/知识/工具规划、实施计划与风险评估。",
+      "trigger_intents": [
+        "设计方案",
+        "方案设计",
+        "架构规划",
+        "技术选型",
+        "智能体方案"
+      ],
+      "user_utterance_examples": [
+        "帮客户设计一个客服智能体方案",
+        "这个需求怎么做架构",
+        "方案里技能怎么规划"
+      ],
+      "goal": [
+        "拆解需求",
+        "设计Agent架构",
+        "规划四类能力",
+        "输出实施计划",
+        "评估风险"
+      ],
+      "required_info": [
+        "client_industry",
+        "core_scenarios",
+        "scale"
+      ],
+      "slot_filling_policy": {
+        "enabled": true,
+        "multi_slot_per_turn": true,
+        "extract_scope": "all_skill_expected_user_info",
+        "skip_satisfied_steps": true,
+        "description": "每轮抽取客户行业、核心场景、规模与约束条件。",
+        "target_info": [
+          "client_industry",
+          "core_scenarios",
+          "scale",
+          "constraints"
+        ]
+      },
+      "nodes": [
+        {
+          "node_id": "collect_requirements",
+          "name": "收集需求",
+          "instruction": "拆解客户需求：行业、核心业务场景、用户规模、对接系统、约束（预算/工期/合规）。需求不完整时逐项追问，避免凭猜测设计。",
+          "expected_user_info": [
+            "client_industry",
+            "core_scenarios",
+            "scale",
+            "constraints"
+          ],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "design_agent_arch",
+          "name": "设计 Agent 架构",
+          "instruction": "基于需求设计数字员工组织：是否总代理、各岗位员工职责边界、渠道接入方式；引用技术知识库中的架构模式，不臆造平台不存在的能力。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "knowledge_query",
+            "continue_flow",
+            "answer_user"
+          ],
+          "knowledge_scope": {
+            "buckets": [
+              "tech_knowledge"
+            ]
+          }
+        },
+        {
+          "node_id": "plan_capabilities",
+          "name": "规划技能知识工具",
+          "instruction": "为每个岗位规划四类能力：SOP 流程（列出关键流程清单）、知识库（分桶规划）、工具（需要接入的系统与 API）、通用技能（需要执行的代码类任务）。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "knowledge_query",
+            "continue_flow",
+            "answer_user"
+          ],
+          "knowledge_scope": {
+            "buckets": [
+              "tech_knowledge",
+              "delivery_process"
+            ]
+          }
+        },
+        {
+          "node_id": "plan_implementation",
+          "name": "输出实施计划",
+          "instruction": "输出分阶段实施计划：底座搭建、员工创建、能力配置、渠道接入、试运行与迭代；每个阶段给出交付物与验收标准。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "answer_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "assess_risk",
+          "name": "风险评估与输出",
+          "instruction": "识别关键风险（数据隐私、模型效果、工具稳定性、变更管理）并给出回退与缓解方案；输出完整方案文档后结束。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "answer_user",
+            "handoff_human"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "source_node_id": "collect_requirements",
+          "next_node_id": "design_agent_arch",
+          "priority": 0,
+          "label": "需求完整"
+        },
+        {
+          "source_node_id": "design_agent_arch",
+          "next_node_id": "plan_capabilities",
+          "priority": 0,
+          "label": "架构确定"
+        },
+        {
+          "source_node_id": "plan_capabilities",
+          "next_node_id": "plan_implementation",
+          "priority": 0,
+          "label": "能力规划完成"
+        },
+        {
+          "source_node_id": "plan_implementation",
+          "next_node_id": "assess_risk",
+          "priority": 0,
+          "label": "实施计划完成"
+        }
+      ],
+      "start_node_id": "collect_requirements",
+      "terminal_node_ids": [
+        "assess_risk"
+      ],
+      "interruption_policy": {
+        "related_question": "可以临时回答，回答后回到方案设计。",
+        "unrelated_business": "可以切换到新技能，并保存当前设计进度。",
+        "chitchat": "简短回应后，引导继续方案设计。",
+        "user_wants_human": "转人工架构师评审。"
+      },
+      "response_rules": [
+        "方案必须结构化输出。",
+        "不承诺平台不存在的能力。",
+        "每个阶段必须有交付物与验收标准。",
+        "风险必须给出缓解方案。"
+      ]
+    },
+    "status": "published"
+  },
+  {
+    "content": {
+      "skill_id": "project_risk_inspection_sop",
+      "name": "项目风险巡检流程",
+      "version": "1.0.0",
+      "business_domain": "delivery",
+      "description": "定时风险巡检：拉取项目台账数据、校验完整性、按风险分级规则识别延期/质量风险并升级。",
+      "trigger_intents": [
+        "风险巡检",
+        "项目风险",
+        "检查进度风险",
+        "日报风险"
+      ],
+      "user_utterance_examples": [
+        "今天有哪些项目有风险",
+        "巡检一下所有项目进度"
+      ],
+      "goal": [
+        "拉取台账数据",
+        "校验数据完整性",
+        "识别风险并分级",
+        "输出巡检结论"
+      ],
+      "required_info": [],
+      "slot_filling_policy": {
+        "enabled": false,
+        "description": "定时任务触发，无需收集用户信息。"
+      },
+      "nodes": [
+        {
+          "node_id": "fetch_project_data",
+          "name": "拉取项目台账",
+          "instruction": "调用项目进度查询工具拉取全部在管项目；工具失败时记录异常并转人工，不拿旧数据硬编。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "call_tool:project.progress.query",
+            "handoff_human",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "validate_data",
+          "name": "校验数据完整性",
+          "instruction": "检查关键字段是否缺失：计划完成率、实际完成率、计划交付日、风险标记；缺失数据不得进入确定性结论，单独列出待确认项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "continue_flow",
+            "answer_user"
+          ]
+        },
+        {
+          "node_id": "classify_risk",
+          "name": "识别风险并分级",
+          "instruction": "按风险分级规则判断：延期超过阈值/阻塞项/人员变动等为高风险，即将到期为关注项；引用风险分级知识库，不主观放大。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "knowledge_query",
+            "continue_flow",
+            "answer_user"
+          ],
+          "knowledge_scope": {
+            "buckets": [
+              "risk_levels"
+            ]
+          }
+        },
+        {
+          "node_id": "escalate_and_report",
+          "name": "升级与输出巡检结论",
+          "instruction": "高风险项目输出升级通知（项目名、风险等级、影响、建议动作），全部项目输出巡检摘要；推送周报工具留痕。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "call_tool:report.weekly.push",
+            "answer_user",
+            "handoff_human"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "source_node_id": "fetch_project_data",
+          "next_node_id": "validate_data",
+          "priority": 0,
+          "label": "数据拉取成功"
+        },
+        {
+          "source_node_id": "validate_data",
+          "next_node_id": "classify_risk",
+          "priority": 0,
+          "label": "校验完成"
+        },
+        {
+          "source_node_id": "classify_risk",
+          "next_node_id": "escalate_and_report",
+          "priority": 0,
+          "label": "分级完成"
+        }
+      ],
+      "start_node_id": "fetch_project_data",
+      "terminal_node_ids": [
+        "escalate_and_report"
+      ],
+      "interruption_policy": {
+        "related_question": "可以临时回答，回答后回到巡检。",
+        "unrelated_business": "可以切换技能，保存巡检进度。",
+        "chitchat": "简短回应后继续巡检。",
+        "user_wants_human": "转人工项目经理。"
+      },
+      "response_rules": [
+        "数据必须来自台账，缺失数据不进入确定性结论。",
+        "风险分级引用知识库标准。",
+        "工具失败必须记录并转人工。",
+        "升级通知带齐项目名、等级、影响与建议。"
+      ]
+    },
+    "status": "published"
+  },
+  {
+    "content": {
+      "skill_id": "weekly_report_sop",
+      "name": "项目周报汇总流程",
+      "version": "1.0.0",
+      "business_domain": "delivery",
+      "description": "周报汇总：按固定口径整理本周进展、风险、下周计划与需支持事项，推送并留痕。",
+      "trigger_intents": [
+        "周报",
+        "周报汇总",
+        "生成周报",
+        "周五周报"
+      ],
+      "user_utterance_examples": [
+        "把本周周报汇总一下",
+        "生成项目周报"
+      ],
+      "goal": [
+        "汇总本周进展",
+        "整理风险事项",
+        "列出下周计划",
+        "推送周报"
+      ],
+      "required_info": [
+        "report_week"
+      ],
+      "slot_filling_policy": {
+        "enabled": true,
+        "multi_slot_per_turn": true,
+        "extract_scope": "all_skill_expected_user_info",
+        "skip_satisfied_steps": true,
+        "description": "确认周报周期（默认本周），其余数据从台账拉取。",
+        "target_info": [
+          "report_week"
+        ]
+      },
+      "nodes": [
+        {
+          "node_id": "collect_week_data",
+          "name": "拉取本周数据",
+          "instruction": "调用项目进度查询工具拉取本周数据；失败时记录异常转人工，不编造数据。",
+          "expected_user_info": [
+            "report_week"
+          ],
+          "allowed_actions": [
+            "call_tool:project.progress.query",
+            "handoff_human",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "organize_sections",
+          "name": "按口径组织周报",
+          "instruction": "按周报模板组织：本周进展（项目+完成事项）、风险与问题、下周计划、需支持事项；引用周报口径知识库保持固定表述。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "knowledge_query",
+            "continue_flow",
+            "answer_user"
+          ],
+          "knowledge_scope": {
+            "buckets": [
+              "report_templates",
+              "report_style"
+            ]
+          }
+        },
+        {
+          "node_id": "review_report",
+          "name": "复核周报",
+          "instruction": "检查周报：数据与台账一致、无遗漏项目、口径统一；有异常项目单独标注；确认后进入推送。",
+          "expected_user_info": [
+            "report_confirmed"
+          ],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow",
+            "answer_user"
+          ]
+        },
+        {
+          "node_id": "push_report",
+          "name": "推送并留痕",
+          "instruction": "调用周报推送工具发送周报；推送成功后确认留痕，输出摘要给创建者。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "call_tool:report.weekly.push",
+            "answer_user"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "source_node_id": "collect_week_data",
+          "next_node_id": "organize_sections",
+          "priority": 0,
+          "label": "数据就绪"
+        },
+        {
+          "source_node_id": "organize_sections",
+          "next_node_id": "review_report",
+          "priority": 0,
+          "label": "草稿完成"
+        },
+        {
+          "source_node_id": "review_report",
+          "next_node_id": "push_report",
+          "priority": 0,
+          "label": "复核通过"
+        }
+      ],
+      "start_node_id": "collect_week_data",
+      "terminal_node_ids": [
+        "push_report"
+      ],
+      "interruption_policy": {
+        "related_question": "可以临时回答，回答后回到周报。",
+        "unrelated_business": "可以切换技能，保存周报进度。",
+        "chitchat": "简短回应后继续周报。",
+        "user_wants_human": "转人工项目经理。"
+      },
+      "response_rules": [
+        "周报口径与模板保持一致。",
+        "数据必须与台账一致，不编造。",
+        "推送前必须复核。",
+        "推送成功必须留痕。"
+      ]
+    },
+    "status": "published"
+  },
+  {
+    "content": {
+      "skill_id": "tech_support_sop",
+      "name": "研发技术答疑流程",
+      "version": "1.0.0",
+      "business_domain": "engineering",
+      "description": "研发技术答疑：识别问题类型、检索技术知识库、必要时执行通用技能辅助分析、输出可执行结论。",
+      "trigger_intents": [
+        "怎么用",
+        "报错了",
+        "API",
+        "集成",
+        "代码问题",
+        "技术问题"
+      ],
+      "user_utterance_examples": [
+        "这个 API 怎么调",
+        "集成时报 401 怎么排查",
+        "帮我看看这段代码的问题"
+      ],
+      "goal": [
+        "识别技术问题",
+        "检索知识库",
+        "输出可执行结论",
+        "必要时执行通用技能"
+      ],
+      "required_info": [
+        "tech_question"
+      ],
+      "slot_filling_policy": {
+        "enabled": true,
+        "multi_slot_per_turn": true,
+        "extract_scope": "all_skill_expected_user_info",
+        "skip_satisfied_steps": true,
+        "description": "抽取问题描述、报错信息、涉及组件与环境。",
+        "target_info": [
+          "tech_question",
+          "error_message",
+          "component",
+          "environment"
+        ]
+      },
+      "nodes": [
+        {
+          "node_id": "classify_question",
+          "name": "识别问题类型",
+          "instruction": "判断问题类型：API 用法咨询/报错排查/代码审查/架构建议；报错类需收集完整报错信息与复现环境。",
+          "expected_user_info": [
+            "tech_question",
+            "error_message",
+            "component",
+            "environment"
+          ],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "search_knowledge",
+          "name": "检索技术知识库",
+          "instruction": "基于问题检索技术知识库与官方文档；答案必须引用来源，不编造 API 用法；检索不到时明确告知缺口。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "knowledge_query",
+            "continue_flow",
+            "answer_user"
+          ],
+          "knowledge_scope": {
+            "buckets": [
+              "tech_knowledge"
+            ]
+          }
+        },
+        {
+          "node_id": "execute_general_skill",
+          "name": "执行通用技能辅助",
+          "instruction": "需要真实分析（代码审查、日志分析、示例生成）时调用对应通用技能执行；以执行输出为准，执行失败说明原因。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "call_tool:code.review",
+            "call_tool:api.example",
+            "continue_flow",
+            "answer_user"
+          ]
+        },
+        {
+          "node_id": "deliver_answer",
+          "name": "输出结论",
+          "instruction": "输出结论：问题原因、解决方案、示例代码、验证步骤；复杂问题给出排查路径并建议转人工深度支持。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "answer_user",
+            "handoff_human"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "source_node_id": "classify_question",
+          "next_node_id": "search_knowledge",
+          "priority": 0,
+          "label": "问题明确"
+        },
+        {
+          "source_node_id": "search_knowledge",
+          "next_node_id": "execute_general_skill",
+          "priority": 0,
+          "label": "需真实执行"
+        },
+        {
+          "source_node_id": "execute_general_skill",
+          "next_node_id": "deliver_answer",
+          "priority": 0,
+          "label": "执行完成"
+        },
+        {
+          "source_node_id": "search_knowledge",
+          "next_node_id": "deliver_answer",
+          "priority": 1,
+          "label": "无需执行"
+        }
+      ],
+      "start_node_id": "classify_question",
+      "terminal_node_ids": [
+        "deliver_answer"
+      ],
+      "interruption_policy": {
+        "related_question": "可以临时回答，回答后回到答疑。",
+        "unrelated_business": "可以切换技能，保存答疑进度。",
+        "chitchat": "简短回应后继续答疑。",
+        "user_wants_human": "转人工研发支持。"
+      },
+      "response_rules": [
+        "不编造 API 用法与参数。",
+        "答案必须引用知识库来源。",
+        "执行类结论以通用技能输出为准。",
+        "无法确定时给出排查路径并转人工。"
+      ]
+    },
+    "status": "published"
+  },
+  {
+    "content": {
+      "skill_id": "test_case_generation_sop",
+      "name": "测试用例生成流程",
+      "version": "1.0.0",
+      "business_domain": "qa",
+      "description": "从需求文档生成测试用例：拆解功能点、覆盖正常/边界/异常场景、输出评审清单。",
+      "trigger_intents": [
+        "生成测试用例",
+        "测试用例",
+        "用例设计",
+        "测试设计"
+      ],
+      "user_utterance_examples": [
+        "为这个需求生成测试用例",
+        "帮我设计登录功能的用例"
+      ],
+      "goal": [
+        "拆解功能点",
+        "生成三组用例",
+        "输出用例清单",
+        "标注评审项"
+      ],
+      "required_info": [
+        "requirement_text"
+      ],
+      "slot_filling_policy": {
+        "enabled": true,
+        "multi_slot_per_turn": true,
+        "extract_scope": "all_skill_expected_user_info",
+        "skip_satisfied_steps": true,
+        "description": "收集需求描述、模块名称与约束。",
+        "target_info": [
+          "requirement_text",
+          "module_name",
+          "constraints"
+        ]
+      },
+      "nodes": [
+        {
+          "node_id": "parse_requirements",
+          "name": "拆解需求为功能点",
+          "instruction": "从需求文本拆解功能点列表；需求不完整时追问缺失部分，不臆造需求。",
+          "expected_user_info": [
+            "requirement_text",
+            "module_name",
+            "constraints"
+          ],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "generate_cases",
+          "name": "生成测试用例",
+          "instruction": "每个功能点生成三组用例：正常流程、边界条件、异常输入；引用测试规范知识库的格式与编号约定。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "knowledge_query",
+            "continue_flow",
+            "answer_user"
+          ],
+          "knowledge_scope": {
+            "buckets": [
+              "test_standards"
+            ]
+          }
+        },
+        {
+          "node_id": "review_output",
+          "name": "输出评审清单",
+          "instruction": "输出用例清单与评审项（覆盖度、依赖数据、前置条件）；提示需求中的歧义点供评审。",
+          "expected_user_info": [
+            "case_review_confirmed"
+          ],
+          "allowed_actions": [
+            "ask_user",
+            "answer_user",
+            "continue_flow"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "source_node_id": "parse_requirements",
+          "next_node_id": "generate_cases",
+          "priority": 0,
+          "label": "功能点完成"
+        },
+        {
+          "source_node_id": "generate_cases",
+          "next_node_id": "review_output",
+          "priority": 0,
+          "label": "用例生成"
+        }
+      ],
+      "start_node_id": "parse_requirements",
+      "terminal_node_ids": [
+        "review_output"
+      ],
+      "interruption_policy": {
+        "related_question": "可以临时回答，回答后回到用例设计。",
+        "unrelated_business": "可以切换技能，保存进度。",
+        "chitchat": "简短回应后继续。",
+        "user_wants_human": "转人工测试负责人。"
+      },
+      "response_rules": [
+        "不臆造需求，缺失部分必须追问。",
+        "每个功能点覆盖正常/边界/异常。",
+        "用例格式遵循测试规范。",
+        "输出歧义点供评审。"
+      ]
+    },
+    "status": "published"
+  },
+  {
+    "content": {
+      "skill_id": "acceptance_check_sop",
+      "name": "验收清单检查流程",
+      "version": "1.0.0",
+      "business_domain": "qa",
+      "description": "按验收标准逐项检查交付物，输出通过/不通过/阻塞结论与缺陷归类。",
+      "trigger_intents": [
+        "验收",
+        "验收清单",
+        "验收检查",
+        "交付验收"
+      ],
+      "user_utterance_examples": [
+        "检查这个交付是否满足验收标准",
+        "生成验收清单"
+      ],
+      "goal": [
+        "对照验收标准",
+        "逐项检查",
+        "输出结论",
+        "缺陷归类"
+      ],
+      "required_info": [
+        "deliverable_desc"
+      ],
+      "slot_filling_policy": {
+        "enabled": true,
+        "multi_slot_per_turn": true,
+        "extract_scope": "all_skill_expected_user_info",
+        "skip_satisfied_steps": true,
+        "description": "收集交付物描述与验收范围。",
+        "target_info": [
+          "deliverable_desc",
+          "acceptance_scope"
+        ]
+      },
+      "nodes": [
+        {
+          "node_id": "load_standards",
+          "name": "加载验收标准",
+          "instruction": "从验收标准知识库加载适用标准清单；无对应标准时向用户确认验收依据。",
+          "expected_user_info": [
+            "deliverable_desc",
+            "acceptance_scope"
+          ],
+          "allowed_actions": [
+            "knowledge_query",
+            "ask_user",
+            "continue_flow"
+          ],
+          "knowledge_scope": {
+            "buckets": [
+              "acceptance_standards"
+            ]
+          }
+        },
+        {
+          "node_id": "check_items",
+          "name": "逐项检查",
+          "instruction": "按标准逐项检查交付物，每项给出结论：通过/不通过/阻塞，并说明依据；不确定项标注待确认。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "answer_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "classify_defects",
+          "name": "缺陷归类输出",
+          "instruction": "不通过项按缺陷报告模板归类：标题、复现、严重级别、建议；输出验收结论摘要。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "answer_user",
+            "handoff_human"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "source_node_id": "load_standards",
+          "next_node_id": "check_items",
+          "priority": 0,
+          "label": "标准就绪"
+        },
+        {
+          "source_node_id": "check_items",
+          "next_node_id": "classify_defects",
+          "priority": 0,
+          "label": "检查完成"
+        }
+      ],
+      "start_node_id": "load_standards",
+      "terminal_node_ids": [
+        "classify_defects"
+      ],
+      "interruption_policy": {
+        "related_question": "可以临时回答，回答后回到验收。",
+        "unrelated_business": "可以切换技能，保存进度。",
+        "chitchat": "简短回应后继续。",
+        "user_wants_human": "转人工验收负责人。"
+      },
+      "response_rules": [
+        "每项结论必须说明依据。",
+        "无标准时先确认验收依据，不臆造。",
+        "缺陷按模板归类。",
+        "不确定项标注待确认，不强行下结论。"
+      ]
+    },
+    "status": "published"
+  },
+  {
+    "content": {
+      "skill_id": "ticket_triage_sop",
+      "name": "工单受理分类流程",
+      "version": "1.0.0",
+      "business_domain": "after_sales",
+      "description": "售后工单受理：分类（咨询/故障/需求）、登记信息、路由到对应处理流程。",
+      "trigger_intents": [
+        "工单",
+        "报障",
+        "有问题",
+        "报个问题",
+        "提交工单"
+      ],
+      "user_utterance_examples": [
+        "我要报个故障",
+        "这个功能好像坏了",
+        "帮我提交工单"
+      ],
+      "goal": [
+        "分类工单",
+        "收集关键信息",
+        "登记工单",
+        "路由处理"
+      ],
+      "required_info": [
+        "ticket_type",
+        "issue_description"
+      ],
+      "slot_filling_policy": {
+        "enabled": true,
+        "multi_slot_per_turn": true,
+        "extract_scope": "all_skill_expected_user_info",
+        "skip_satisfied_steps": true,
+        "description": "每轮收集工单类型、问题描述、影响范围与客户信息。",
+        "target_info": [
+          "ticket_type",
+          "issue_description",
+          "impact_scope",
+          "customer_info"
+        ]
+      },
+      "nodes": [
+        {
+          "node_id": "classify_ticket",
+          "name": "分类工单",
+          "instruction": "判断工单类型：咨询/故障/需求变更；故障类进一步判断影响范围（单客户/多客户/生产环境）。",
+          "expected_user_info": [
+            "ticket_type",
+            "issue_description"
+          ],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "collect_ticket_info",
+          "name": "收集工单信息",
+          "instruction": "收集必要信息：客户名称、环境、影响范围、首次出现时间、已尝试步骤；咨询类可跳过故障字段。",
+          "expected_user_info": [
+            "impact_scope",
+            "customer_info"
+          ],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "register_ticket",
+          "name": "登记并路由",
+          "instruction": "调用工单工具登记工单并获取工单号；故障类路由到故障排查流程，咨询类直接解答，需求类转人工评估。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "call_tool:ticket.handle",
+            "continue_flow",
+            "handoff_human"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "source_node_id": "classify_ticket",
+          "next_node_id": "collect_ticket_info",
+          "priority": 0,
+          "label": "分类完成"
+        },
+        {
+          "source_node_id": "collect_ticket_info",
+          "next_node_id": "register_ticket",
+          "priority": 0,
+          "label": "信息齐备"
+        }
+      ],
+      "start_node_id": "classify_ticket",
+      "terminal_node_ids": [
+        "register_ticket"
+      ],
+      "interruption_policy": {
+        "related_question": "可以临时回答，回答后回到工单。",
+        "unrelated_business": "可以切换技能，保存工单进度。",
+        "chitchat": "简短回应后继续。",
+        "user_wants_human": "直接转人工售后。"
+      },
+      "response_rules": [
+        "故障类必须登记工单号。",
+        "收集信息按类型裁剪，不冗余追问。",
+        "需求变更一律转人工评估。",
+        "涉及生产环境的故障优先升级。"
+      ]
+    },
+    "status": "published"
+  },
+  {
+    "content": {
+      "skill_id": "fault_diagnosis_sop",
+      "name": "故障排查流程",
+      "version": "1.0.0",
+      "business_domain": "after_sales",
+      "description": "故障排查：分级、按手册逐层排查、调用工具查询、无法解决时转人工带齐上下文。",
+      "trigger_intents": [
+        "故障",
+        "报错",
+        "不可用",
+        "挂了",
+        "宕机",
+        "排查"
+      ],
+      "user_utterance_examples": [
+        "系统登录不了了",
+        "接口报 500",
+        "页面打不开"
+      ],
+      "goal": [
+        "故障分级",
+        "定位问题",
+        "给出处理建议",
+        "必要时升级"
+      ],
+      "required_info": [
+        "fault_description",
+        "environment"
+      ],
+      "slot_filling_policy": {
+        "enabled": true,
+        "multi_slot_per_turn": true,
+        "extract_scope": "all_skill_expected_user_info",
+        "skip_satisfied_steps": true,
+        "description": "每轮收集故障描述、环境、影响范围与复现步骤。",
+        "target_info": [
+          "fault_description",
+          "environment",
+          "impact_scope",
+          "repro_steps"
+        ]
+      },
+      "nodes": [
+        {
+          "node_id": "grade_fault",
+          "name": "故障分级",
+          "instruction": "按故障处理手册分级：生产不可用=P1、主要功能异常=P2、一般功能异常=P3、轻微问题=P4；P1/P2 优先响应并通知。",
+          "expected_user_info": [
+            "fault_description",
+            "environment",
+            "impact_scope"
+          ],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ],
+          "knowledge_scope": {
+            "buckets": [
+              "fault_manual"
+            ]
+          }
+        },
+        {
+          "node_id": "query_context",
+          "name": "查询故障上下文",
+          "instruction": "调用日志查询与工单工具获取故障上下文（日志、最近变更、相关工单）；工具不可用时记录并继续手册排查。",
+          "expected_user_info": [
+            "repro_steps"
+          ],
+          "allowed_actions": [
+            "call_tool:log.query",
+            "call_tool:ticket.handle",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "manual_diagnosis",
+          "name": "按手册逐层排查",
+          "instruction": "按故障处理手册的排查路径逐层定位：环境检查→配置检查→依赖检查→数据检查；每一步给出结论与依据。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "knowledge_query",
+            "continue_flow",
+            "answer_user"
+          ],
+          "knowledge_scope": {
+            "buckets": [
+              "fault_manual",
+              "faq_after_sales"
+            ]
+          }
+        },
+        {
+          "node_id": "resolve_or_escalate",
+          "name": "解决或升级",
+          "instruction": "能定位的给出处理建议并更新工单；无法定位/需产线介入/涉及定制需求时转人工，带齐：客户、环境、影响、已尝试步骤、日志引用。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "call_tool:ticket.handle",
+            "answer_user",
+            "handoff_human"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "source_node_id": "grade_fault",
+          "next_node_id": "query_context",
+          "priority": 0,
+          "label": "分级完成"
+        },
+        {
+          "source_node_id": "query_context",
+          "next_node_id": "manual_diagnosis",
+          "priority": 0,
+          "label": "上下文就绪"
+        },
+        {
+          "source_node_id": "manual_diagnosis",
+          "next_node_id": "resolve_or_escalate",
+          "priority": 0,
+          "label": "排查完成"
+        }
+      ],
+      "start_node_id": "grade_fault",
+      "terminal_node_ids": [
+        "resolve_or_escalate"
+      ],
+      "interruption_policy": {
+        "related_question": "可以临时回答，回答后回到排查。",
+        "unrelated_business": "可以切换技能，保存排查进度。",
+        "chitchat": "简短回应后继续。",
+        "user_wants_human": "直接转人工售后。"
+      },
+      "response_rules": [
+        "P1/P2 优先响应并通知。",
+        "排查每一步必须有依据。",
+        "不承诺修复时间。",
+        "升级必须带齐上下文与日志引用。"
+      ]
+    },
+    "status": "published"
+  },
+  {
+    "content": {
+      "skill_id": "knowledge_sedimentation_sop",
+      "name": "知识沉淀流程",
+      "version": "1.0.0",
+      "business_domain": "knowledge_ops",
+      "description": "从 Trace 与反馈识别知识缺口，输出可落地的知识修订建议（新增文档/更新分桶/修订 SOP）。",
+      "trigger_intents": [
+        "知识沉淀",
+        "知识缺口",
+        "修订建议",
+        "沉淀经验",
+        "Trace分析"
+      ],
+      "user_utterance_examples": [
+        "最近哪些知识需要补",
+        "从反馈里识别知识缺口",
+        "给出知识修订建议"
+      ],
+      "goal": [
+        "分析反馈信号",
+        "定位知识缺口",
+        "输出修订建议",
+        "评估优先级"
+      ],
+      "required_info": [
+        "analysis_window"
+      ],
+      "slot_filling_policy": {
+        "enabled": true,
+        "multi_slot_per_turn": true,
+        "extract_scope": "all_skill_expected_user_info",
+        "skip_satisfied_steps": true,
+        "description": "确认分析窗口（默认最近一周）。",
+        "target_info": [
+          "analysis_window"
+        ]
+      },
+      "nodes": [
+        {
+          "node_id": "gather_signals",
+          "name": "收集反馈信号",
+          "instruction": "收集窗口内信号：知识检索未命中、差评集中点、转人工密集点、高频重复问答；数据来自 Trace 与反馈记录。",
+          "expected_user_info": [
+            "analysis_window"
+          ],
+          "allowed_actions": [
+            "knowledge_query",
+            "continue_flow",
+            "answer_user"
+          ]
+        },
+        {
+          "node_id": "locate_gaps",
+          "name": "定位知识缺口",
+          "instruction": "将信号归类到缺口类型：文档缺失/分桶错配/SOP 节点缺陷/FAQ 缺失；每个缺口给出证据。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "continue_flow",
+            "answer_user"
+          ]
+        },
+        {
+          "node_id": "draft_suggestions",
+          "name": "输出修订建议",
+          "instruction": "每个缺口输出修订建议：内容草案、影响范围、优先级（高/中/低）；不直接改知识库，走评审。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "answer_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "handoff_review",
+          "name": "移交评审",
+          "instruction": "汇总建议清单移交知识运营负责人评审；高优先级且明确的建议可直接进入草稿。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "handoff_human",
+            "answer_user"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "source_node_id": "gather_signals",
+          "next_node_id": "locate_gaps",
+          "priority": 0,
+          "label": "信号收集完成"
+        },
+        {
+          "source_node_id": "locate_gaps",
+          "next_node_id": "draft_suggestions",
+          "priority": 0,
+          "label": "缺口定位完成"
+        },
+        {
+          "source_node_id": "draft_suggestions",
+          "next_node_id": "handoff_review",
+          "priority": 0,
+          "label": "建议输出"
+        }
+      ],
+      "start_node_id": "gather_signals",
+      "terminal_node_ids": [
+        "handoff_review"
+      ],
+      "interruption_policy": {
+        "related_question": "可以临时回答，回答后回到分析。",
+        "unrelated_business": "可以切换技能，保存进度。",
+        "chitchat": "简短回应后继续。",
+        "user_wants_human": "转人工知识运营。"
+      },
+      "response_rules": [
+        "每个缺口必须有证据。",
+        "建议必须可落地（草案+范围+优先级）。",
+        "不直接删改他人知识库。",
+        "优先处理高频与高影响缺口。"
+      ]
+    },
+    "status": "published"
+  },
+  {
+    "content": {
+      "skill_id": "admin_service_sop",
+      "name": "行政服务流程",
+      "version": "1.0.0",
+      "business_domain": "internal_admin",
+      "description": "内部行政服务：制度咨询、报销/请假/差旅流程引导；信息不足时追问，特殊情况转人工。",
+      "trigger_intents": [
+        "报销",
+        "请假",
+        "差旅",
+        "福利",
+        "制度",
+        "怎么申请"
+      ],
+      "user_utterance_examples": [
+        "报销流程是什么",
+        "请年假怎么申请",
+        "出差补贴标准是多少"
+      ],
+      "goal": [
+        "识别行政需求",
+        "检索制度",
+        "给出流程指引",
+        "特殊情况转人工"
+      ],
+      "required_info": [
+        "admin_request_type"
+      ],
+      "slot_filling_policy": {
+        "enabled": true,
+        "multi_slot_per_turn": true,
+        "extract_scope": "all_skill_expected_user_info",
+        "skip_satisfied_steps": true,
+        "description": "每轮抽取需求类型与关键参数（日期、金额、类型）。",
+        "target_info": [
+          "admin_request_type",
+          "detail_params"
+        ]
+      },
+      "nodes": [
+        {
+          "node_id": "identify_request",
+          "name": "识别行政需求",
+          "instruction": "判断需求类型：制度咨询/报销/请假/差旅/福利/其他；按类型进入对应检索。",
+          "expected_user_info": [
+            "admin_request_type"
+          ],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "search_policy",
+          "name": "检索制度",
+          "instruction": "从公司制度库按分桶检索（考勤/报销/差旅/福利）；回答引用制度来源与条款。",
+          "expected_user_info": [
+            "detail_params"
+          ],
+          "allowed_actions": [
+            "knowledge_query",
+            "continue_flow",
+            "answer_user"
+          ],
+          "knowledge_scope": {
+            "buckets": [
+              "attendance_policy",
+              "expense_policy",
+              "travel_policy",
+              "benefits_policy"
+            ]
+          }
+        },
+        {
+          "node_id": "guide_process",
+          "name": "给出流程指引",
+          "instruction": "输出步骤清单与所需材料；流程涉及系统操作时给出入口说明。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "answer_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "escalate_special",
+          "name": "特殊情况转人工",
+          "instruction": "特批/单据缺失/跨部门/制度未覆盖的情况转人工，说明原因与已收集信息。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "handoff_human",
+            "answer_user"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "source_node_id": "identify_request",
+          "next_node_id": "search_policy",
+          "priority": 0,
+          "label": "类型明确"
+        },
+        {
+          "source_node_id": "search_policy",
+          "next_node_id": "guide_process",
+          "priority": 0,
+          "label": "制度命中"
+        },
+        {
+          "source_node_id": "guide_process",
+          "next_node_id": "escalate_special",
+          "priority": 0,
+          "label": "出现特殊情况"
+        }
+      ],
+      "start_node_id": "identify_request",
+      "terminal_node_ids": [
+        "guide_process",
+        "escalate_special"
+      ],
+      "interruption_policy": {
+        "related_question": "可以临时回答，回答后回到行政服务。",
+        "unrelated_business": "可以切换技能，保存进度。",
+        "chitchat": "简短回应后继续。",
+        "user_wants_human": "直接转人工行政。"
+      },
+      "response_rules": [
+        "回答必须引用制度来源。",
+        "信息不足时逐项追问，不猜测。",
+        "特殊情况转人工并说明原因。",
+        "不泄露他人隐私信息。"
+      ]
+    },
+    "status": "published"
+  },
+  {
+    "content": {
+      "skill_id": "code_implementation_sop",
+      "name": "编码实现交付流程",
+      "version": "1.0.0",
+      "business_domain": "engineering",
+      "description": "软件工程师编码交付：澄清需求与验收标准、设计方案、实现代码、运行测试、输出交付说明。",
+      "trigger_intents": [
+        "写代码",
+        "实现功能",
+        "开发",
+        "编码",
+        "写个脚本",
+        "实现接口"
+      ],
+      "user_utterance_examples": [
+        "帮我实现这个接口",
+        "写一个数据清洗脚本",
+        "把这段逻辑实现成函数"
+      ],
+      "goal": [
+        "澄清需求与验收标准",
+        "输出设计方案",
+        "实现代码",
+        "运行测试验证",
+        "输出交付说明"
+      ],
+      "required_info": [
+        "task_description",
+        "acceptance_criteria"
+      ],
+      "slot_filling_policy": {
+        "enabled": true,
+        "multi_slot_per_turn": true,
+        "extract_scope": "all_skill_expected_user_info",
+        "skip_satisfied_steps": true,
+        "description": "每轮抽取任务描述、验收标准、技术栈与环境约束。",
+        "target_info": [
+          "task_description",
+          "acceptance_criteria",
+          "tech_stack",
+          "constraints"
+        ]
+      },
+      "nodes": [
+        {
+          "node_id": "clarify_task",
+          "name": "澄清需求与验收标准",
+          "instruction": "收集任务描述、验收标准、技术栈与环境约束；需求不明确时逐项追问，不凭猜测实现。",
+          "expected_user_info": [
+            "task_description",
+            "acceptance_criteria",
+            "tech_stack",
+            "constraints"
+          ],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "design_solution",
+          "name": "输出设计方案",
+          "instruction": "基于需求输出简短设计方案：实现思路、模块拆分、接口定义、依赖与风险；引用技术知识库中的编码规范与最佳实践。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "knowledge_query",
+            "continue_flow",
+            "answer_user"
+          ],
+          "knowledge_scope": {
+            "buckets": [
+              "tech_knowledge",
+              "api_docs"
+            ]
+          }
+        },
+        {
+          "node_id": "implement_code",
+          "name": "实现代码",
+          "instruction": "按设计方案实现代码，遵循公司编码规范；使用代码审查辅助技能校验，输出时说明关键实现点。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "call_tool:code.review",
+            "continue_flow",
+            "answer_user"
+          ]
+        },
+        {
+          "node_id": "verify_and_deliver",
+          "name": "验证并交付",
+          "instruction": "给出验证方式（示例输入输出、单元测试建议）与交付说明（文件/函数清单、使用方法、注意事项）；无法验证的部分明确标注。",
+          "expected_user_info": [
+            "delivery_confirmed"
+          ],
+          "allowed_actions": [
+            "ask_user",
+            "answer_user",
+            "continue_flow"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "source_node_id": "clarify_task",
+          "next_node_id": "design_solution",
+          "priority": 0,
+          "label": "需求明确"
+        },
+        {
+          "source_node_id": "design_solution",
+          "next_node_id": "implement_code",
+          "priority": 0,
+          "label": "方案确认"
+        },
+        {
+          "source_node_id": "implement_code",
+          "next_node_id": "verify_and_deliver",
+          "priority": 0,
+          "label": "实现完成"
+        }
+      ],
+      "start_node_id": "clarify_task",
+      "terminal_node_ids": [
+        "verify_and_deliver"
+      ],
+      "interruption_policy": {
+        "related_question": "可以临时回答，回答后回到编码任务。",
+        "unrelated_business": "可以切换技能，保存编码进度。",
+        "chitchat": "简短回应后继续编码。",
+        "user_wants_human": "转人工资深工程师。"
+      },
+      "response_rules": [
+        "需求不明确时不实现，先追问。",
+        "交付代码必须附说明与验证方式。",
+        "不编造 API 用法，以知识库为准。",
+        "无法验证的部分必须明确标注。"
+      ]
+    },
+    "status": "published"
+  },
+  {
+    "content": {
+      "skill_id": "quote_review_sop",
+      "name": "报价边界审查流程",
+      "version": "1.0.0",
+      "business_domain": "pre_sales",
+      "description": "报价相关咨询边界审查：区分公开口径与需人工确认的商务条款，避免越权承诺。",
+      "trigger_intents": [
+        "多少钱",
+        "报价",
+        "预算",
+        "价格",
+        "怎么收费"
+      ],
+      "user_utterance_examples": [
+        "开发一个智能体多少钱",
+        "报价单能给吗",
+        "按什么标准收费"
+      ],
+      "goal": [
+        "识别报价请求",
+        "给出公开口径",
+        "商务条款转人工"
+      ],
+      "required_info": [
+        "quote_scope"
+      ],
+      "slot_filling_policy": {
+        "enabled": true,
+        "multi_slot_per_turn": true,
+        "extract_scope": "all_skill_expected_user_info",
+        "skip_satisfied_steps": true,
+        "description": "收集报价范围与客户场景。",
+        "target_info": [
+          "quote_scope",
+          "quote_scenario"
+        ]
+      },
+      "nodes": [
+        {
+          "node_id": "clarify_quote_scope",
+          "name": "澄清报价范围",
+          "instruction": "确认报价范围：咨询定价模式/需要具体报价/商务合同条款；不同范围走不同路径。",
+          "expected_user_info": [
+            "quote_scope",
+            "quote_scenario"
+          ],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "share_public_pricing",
+          "name": "给出公开定价口径",
+          "instruction": "仅给出公开定价模式（如按项目评估/按人天/订阅制），引用产品手册口径，不给具体数字承诺。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "knowledge_query",
+            "answer_user",
+            "continue_flow"
+          ],
+          "knowledge_scope": {
+            "buckets": [
+              "product_manual"
+            ]
+          }
+        },
+        {
+          "node_id": "refer_to_sales",
+          "name": "转人工销售",
+          "instruction": "具体报价、报价单、折扣、合同条款一律转人工销售，带齐场景与需求上下文。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "handoff_human"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "source_node_id": "clarify_quote_scope",
+          "next_node_id": "share_public_pricing",
+          "priority": 0,
+          "label": "定价模式咨询"
+        },
+        {
+          "source_node_id": "clarify_quote_scope",
+          "next_node_id": "refer_to_sales",
+          "priority": 1,
+          "label": "具体报价/商务"
+        },
+        {
+          "source_node_id": "share_public_pricing",
+          "next_node_id": "refer_to_sales",
+          "priority": 0,
+          "label": "需进一步报价"
+        }
+      ],
+      "start_node_id": "clarify_quote_scope",
+      "terminal_node_ids": [
+        "refer_to_sales"
+      ],
+      "interruption_policy": {
+        "related_question": "可以临时回答，回答后回到报价咨询。",
+        "unrelated_business": "可以切换技能，保存进度。",
+        "chitchat": "简短回应后继续。",
+        "user_wants_human": "直接转人工销售。"
+      },
+      "response_rules": [
+        "不给具体价格与折扣承诺。",
+        "报价单/合同条款一律转人工。",
+        "公开口径引用产品手册。",
+        "转人工带齐场景上下文。"
+      ]
+    },
+    "status": "published"
+  },
+  {
+    "tenant_id": "__TENANT__",
+    "content": {
+      "skill_id": "code_review_expert_sop",
+      "name": "代码审查流程",
+      "version": "1.0.0",
+      "business_domain": "engineering",
+      "description": "代码审查专家的标准工作流程：收集代码与审查上下文 → 按正确性/安全性/可维护性/性能逐项审查 → 分级标注审查意见 → 交付审查报告与改进建议。",
+      "trigger_intents": [
+        "代码审查",
+        "review",
+        "审查代码",
+        "PR 检查",
+        "帮我看看这段代码"
+      ],
+      "user_utterance_examples": [
+        "帮我代码审查",
+        "我要review"
+      ],
+      "goal": [
+        "收集代码与审查上下文",
+        "按正确性/安全性/可维护性/性能逐项审查",
+        "分级标注审查意见",
+        "交付审查报告与改进建议"
+      ],
+      "required_info": [],
+      "slot_filling_policy": {
+        "enabled": true,
+        "multi_slot_per_turn": true,
+        "extract_scope": "all_skill_expected_user_info",
+        "skip_satisfied_steps": true,
+        "description": "每轮同时抽取用户已表达的信息，已满足的信息不再追问。",
+        "target_info": []
+      },
+      "response_rules": [
+        "输出结构化结果，关键结论带依据或数据。",
+        "信息不足时先追问，不要臆测。",
+        "超出职责边界的情况转人工并附上已收集的上下文。"
+      ],
+      "nodes": [
+        {
+          "node_id": "step_1",
+          "type": "collect_info",
+          "name": "收集代码与审查上下文",
+          "instruction": "将本步骤作为目标而不是固定话术：收集代码与审查上下文。参考要点：获取待审查的代码、PR 变更或文件路径，确认审查范围（单文件/模块/整个 PR）。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_clarification",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_2",
+          "type": "collect_info",
+          "name": "按正确性/安全性/可维护性/性能逐项审查",
+          "instruction": "将本步骤作为目标而不是固定话术：按正确性/安全性/可维护性/性能逐项审查。参考要点：逐一检查正确性（是否实现预期功能）、安全性（注入/鉴权绕过/数据泄露）、可维护性（命名/结构/重复代码）、性能（N+1 查询/资源泄漏）。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_3",
+          "type": "collect_info",
+          "name": "分级标注审查意见",
+          "instruction": "将本步骤作为目标而不是固定话术：分级标注审查意见。参考要点：用 🔴 阻塞项、🟡 建议项、💭 小改进分级标注，每条给出具体位置、原因和修改建议，表扬写得好的代码。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_4",
+          "type": "collect_info",
+          "name": "交付审查报告与改进建议",
+          "instruction": "将本步骤作为目标而不是固定话术：交付审查报告与改进建议。参考要点：一次输出完整审查意见，区分事实与观点；阻塞项明确说明必须修复的理由，建议项给出优先级。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "answer_user",
+            "handoff_human",
+            "continue_flow"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "source_node_id": "step_1",
+          "next_node_id": "step_2",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        },
+        {
+          "source_node_id": "step_2",
+          "next_node_id": "step_3",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        },
+        {
+          "source_node_id": "step_3",
+          "next_node_id": "step_4",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        }
+      ],
+      "start_node_id": "step_1",
+      "terminal_node_ids": [
+        "step_4"
+      ],
+      "interruption_policy": {
+        "related_question": "可以临时回答，回答后回到当前流程。",
+        "unrelated_business": "可以切换到新技能，并保存当前流程进度。",
+        "chitchat": "简短回应后，引导用户继续当前流程。",
+        "user_wants_human": "直接转人工。"
+      }
+    },
+    "status": "published"
+  },
+  {
+    "tenant_id": "__TENANT__",
+    "content": {
+      "skill_id": "backend_architect_sop",
+      "name": "后端架构设计流程",
+      "version": "1.0.0",
+      "business_domain": "engineering",
+      "description": "后端架构师的标准工作流程：收集需求与约束 → 设计系统架构与服务分解 → 设计数据库与 API 规范 → 交付架构文档与风险清单。",
+      "trigger_intents": [
+        "架构设计",
+        "系统设计",
+        "后端架构",
+        "数据库设计",
+        "微服务设计"
+      ],
+      "user_utterance_examples": [
+        "帮我架构设计",
+        "我要系统设计"
+      ],
+      "goal": [
+        "收集需求与约束",
+        "设计系统架构与服务分解",
+        "设计数据库与 API 规范",
+        "交付架构文档与风险清单"
+      ],
+      "required_info": [],
+      "slot_filling_policy": {
+        "enabled": true,
+        "multi_slot_per_turn": true,
+        "extract_scope": "all_skill_expected_user_info",
+        "skip_satisfied_steps": true,
+        "description": "每轮同时抽取用户已表达的信息，已满足的信息不再追问。",
+        "target_info": []
+      },
+      "response_rules": [
+        "输出结构化结果，关键结论带依据或数据。",
+        "信息不足时先追问，不要臆测。",
+        "超出职责边界的情况转人工并附上已收集的上下文。"
+      ],
+      "nodes": [
+        {
+          "node_id": "step_1",
+          "type": "collect_info",
+          "name": "收集需求与约束",
+          "instruction": "将本步骤作为目标而不是固定话术：收集需求与约束。参考要点：确认业务目标、用户规模、性能要求（延迟/吞吐量）、现有系统约束、安全合规要求。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_clarification",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_2",
+          "type": "collect_info",
+          "name": "设计系统架构与服务分解",
+          "instruction": "将本步骤作为目标而不是固定话术：设计系统架构与服务分解。参考要点：设计可水平扩展的微服务或模块化架构，明确服务边界、通信方式（REST/事件驱动）、缓存与扩展策略。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_3",
+          "type": "collect_info",
+          "name": "设计数据库与 API 规范",
+          "instruction": "将本步骤作为目标而不是固定话术：设计数据库与 API 规范。参考要点：设计数据库 schema 与索引（10 万+ 实体规模）、API 契约与版本策略、认证授权方案、监控告警。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_4",
+          "type": "collect_info",
+          "name": "交付架构文档与风险清单",
+          "instruction": "将本步骤作为目标而不是固定话术：交付架构文档与风险清单。参考要点：输出高层架构图、服务分解说明、数据库/API 设计、部署与容灾方案、风险清单，默认包含安全与监控设计。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "answer_user",
+            "handoff_human",
+            "continue_flow"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "source_node_id": "step_1",
+          "next_node_id": "step_2",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        },
+        {
+          "source_node_id": "step_2",
+          "next_node_id": "step_3",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        },
+        {
+          "source_node_id": "step_3",
+          "next_node_id": "step_4",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        }
+      ],
+      "start_node_id": "step_1",
+      "terminal_node_ids": [
+        "step_4"
+      ],
+      "interruption_policy": {
+        "related_question": "可以临时回答，回答后回到当前流程。",
+        "unrelated_business": "可以切换到新技能，并保存当前流程进度。",
+        "chitchat": "简短回应后，引导用户继续当前流程。",
+        "user_wants_human": "直接转人工。"
+      }
+    },
+    "status": "published"
+  },
+  {
+    "tenant_id": "__TENANT__",
+    "content": {
+      "skill_id": "api_testing_sop",
+      "name": "API 测试流程",
+      "version": "1.0.0",
+      "business_domain": "testing",
+      "description": "API 测试工程师的标准工作流程：步骤 1：API 发现和分析 → 步骤 2：测试策略开发 → 步骤 3：测试实施和自动化 → 步骤 4：监控和持续改进。",
+      "trigger_intents": [
+        "API 测试",
+        "接口测试",
+        "测试用例",
+        "接口验证",
+        "API 集成测试"
+      ],
+      "user_utterance_examples": [
+        "帮我API 测试",
+        "我要接口测试"
+      ],
+      "goal": [
+        "步骤 1：API 发现和分析",
+        "步骤 2：测试策略开发",
+        "步骤 3：测试实施和自动化",
+        "步骤 4：监控和持续改进"
+      ],
+      "required_info": [],
+      "slot_filling_policy": {
+        "enabled": true,
+        "multi_slot_per_turn": true,
+        "extract_scope": "all_skill_expected_user_info",
+        "skip_satisfied_steps": true,
+        "description": "每轮同时抽取用户已表达的信息，已满足的信息不再追问。",
+        "target_info": []
+      },
+      "response_rules": [
+        "输出结构化结果，关键结论带依据或数据。",
+        "信息不足时先追问，不要臆测。",
+        "超出职责边界的情况转人工并附上已收集的上下文。"
+      ],
+      "nodes": [
+        {
+          "node_id": "step_1",
+          "type": "collect_info",
+          "name": "步骤 1：API 发现和分析",
+          "instruction": "将本步骤作为目标而不是固定话术：步骤 1：API 发现和分析。参考要点：用完整的端点清单编目所有内部和外部 API；分析 API 规格、文档和契约要求；识别关键路径、高风险区域和集成依赖；评估当前测试覆盖率并识别差距。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_clarification",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_2",
+          "type": "collect_info",
+          "name": "步骤 2：测试策略开发",
+          "instruction": "将本步骤作为目标而不是固定话术：步骤 2：测试策略开发。参考要点：设计覆盖功能、性能和安全方面的全面测试策略；创建带有合成数据生成的测试数据管理策略；规划测试环境搭建和类生产配置；定义成功标准、质量门控和验收阈值。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_3",
+          "type": "collect_info",
+          "name": "步骤 3：测试实施和自动化",
+          "instruction": "将本步骤作为目标而不是固定话术：步骤 3：测试实施和自动化。参考要点：使用现代框架（Playwright、REST Assured、k6）构建自动化测试套件；实施包含负载、压力和耐久性场景的性能测试；创建覆盖 OWASP API Security Top 10 的安全测试自动化；将测试集成到带有质量门控的 CI/CD 流水线中。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_4",
+          "type": "collect_info",
+          "name": "步骤 4：监控和持续改进",
+          "instruction": "将本步骤作为目标而不是固定话术：步骤 4：监控和持续改进。参考要点：设置带有健康检查和告警的生产 API 监控；分析测试结果并提供可操作的洞察；创建带有指标和建议的全面报告；基于发现和反馈持续优化测试策略。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "answer_user",
+            "handoff_human",
+            "continue_flow"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "source_node_id": "step_1",
+          "next_node_id": "step_2",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        },
+        {
+          "source_node_id": "step_2",
+          "next_node_id": "step_3",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        },
+        {
+          "source_node_id": "step_3",
+          "next_node_id": "step_4",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        }
+      ],
+      "start_node_id": "step_1",
+      "terminal_node_ids": [
+        "step_4"
+      ],
+      "interruption_policy": {
+        "related_question": "可以临时回答，回答后回到当前流程。",
+        "unrelated_business": "可以切换到新技能，并保存当前流程进度。",
+        "chitchat": "简短回应后，引导用户继续当前流程。",
+        "user_wants_human": "直接转人工。"
+      }
+    },
+    "status": "published"
+  },
+  {
+    "tenant_id": "__TENANT__",
+    "content": {
+      "skill_id": "performance_benchmark_sop",
+      "name": "性能基准测试流程",
+      "version": "1.0.0",
+      "business_domain": "testing",
+      "description": "性能基准工程师的标准工作流程：第一步：基线测量 → 第二步：场景设计 → 第三步：执行与分析 → 第四步：报告与建议。",
+      "trigger_intents": [
+        "性能测试",
+        "压测",
+        "基准测试",
+        "性能优化",
+        "容量规划"
+      ],
+      "user_utterance_examples": [
+        "帮我性能测试",
+        "我要压测"
+      ],
+      "goal": [
+        "第一步：基线测量",
+        "第二步：场景设计",
+        "第三步：执行与分析",
+        "第四步：报告与建议"
+      ],
+      "required_info": [],
+      "slot_filling_policy": {
+        "enabled": true,
+        "multi_slot_per_turn": true,
+        "extract_scope": "all_skill_expected_user_info",
+        "skip_satisfied_steps": true,
+        "description": "每轮同时抽取用户已表达的信息，已满足的信息不再追问。",
+        "target_info": []
+      },
+      "response_rules": [
+        "输出结构化结果，关键结论带依据或数据。",
+        "信息不足时先追问，不要臆测。",
+        "超出职责边界的情况转人工并附上已收集的上下文。"
+      ],
+      "nodes": [
+        {
+          "node_id": "step_1",
+          "type": "collect_info",
+          "name": "第一步：基线测量",
+          "instruction": "将本步骤作为目标而不是固定话术：第一步：基线测量。参考要点：在当前版本上建立性能基准；记录各接口的延迟分布和吞吐量；确认测试环境和数据准备就绪。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_clarification",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_2",
+          "type": "collect_info",
+          "name": "第二步：场景设计",
+          "instruction": "将本步骤作为目标而不是固定话术：第二步：场景设计。参考要点：根据生产流量特征设计测试场景；混合读写比例、模拟真实用户行为模式；设定性能目标（SLA/SLO）。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_3",
+          "type": "collect_info",
+          "name": "第三步：执行与分析",
+          "instruction": "将本步骤作为目标而不是固定话术：第三步：执行与分析。参考要点：运行阶梯式负载测试；实时监控系统资源（CPU、内存、IO、网络）；找到拐点和瓶颈。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_4",
+          "type": "collect_info",
+          "name": "第四步：报告与建议",
+          "instruction": "将本步骤作为目标而不是固定话术：第四步：报告与建议。参考要点：输出性能测试报告，含对比数据；提出优化建议和容量规划；关键优化纳入下个 Sprint。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "answer_user",
+            "handoff_human",
+            "continue_flow"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "source_node_id": "step_1",
+          "next_node_id": "step_2",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        },
+        {
+          "source_node_id": "step_2",
+          "next_node_id": "step_3",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        },
+        {
+          "source_node_id": "step_3",
+          "next_node_id": "step_4",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        }
+      ],
+      "start_node_id": "step_1",
+      "terminal_node_ids": [
+        "step_4"
+      ],
+      "interruption_policy": {
+        "related_question": "可以临时回答，回答后回到当前流程。",
+        "unrelated_business": "可以切换到新技能，并保存当前流程进度。",
+        "chitchat": "简短回应后，引导用户继续当前流程。",
+        "user_wants_human": "直接转人工。"
+      }
+    },
+    "status": "published"
+  },
+  {
+    "tenant_id": "__TENANT__",
+    "content": {
+      "skill_id": "devops_automation_sop",
+      "name": "DevOps 自动化流程",
+      "version": "1.0.0",
+      "business_domain": "engineering",
+      "description": "DevOps 自动化工程师的标准工作流程：第一步：基础设施评估 → 第二步：流水线设计 → 第三步：实施落地 → 第四步：优化与维护。",
+      "trigger_intents": [
+        "CI/CD",
+        "DevOps",
+        "部署流水线",
+        "基础设施自动化",
+        "自动化运维"
+      ],
+      "user_utterance_examples": [
+        "帮我CI/CD",
+        "我要DevOps"
+      ],
+      "goal": [
+        "第一步：基础设施评估",
+        "第二步：流水线设计",
+        "第三步：实施落地",
+        "第四步：优化与维护"
+      ],
+      "required_info": [],
+      "slot_filling_policy": {
+        "enabled": true,
+        "multi_slot_per_turn": true,
+        "extract_scope": "all_skill_expected_user_info",
+        "skip_satisfied_steps": true,
+        "description": "每轮同时抽取用户已表达的信息，已满足的信息不再追问。",
+        "target_info": []
+      },
+      "response_rules": [
+        "输出结构化结果，关键结论带依据或数据。",
+        "信息不足时先追问，不要臆测。",
+        "超出职责边界的情况转人工并附上已收集的上下文。"
+      ],
+      "nodes": [
+        {
+          "node_id": "step_1",
+          "type": "collect_info",
+          "name": "第一步：基础设施评估",
+          "instruction": "将本步骤作为目标而不是固定话术：第一步：基础设施评估。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_clarification",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_2",
+          "type": "collect_info",
+          "name": "第二步：流水线设计",
+          "instruction": "将本步骤作为目标而不是固定话术：第二步：流水线设计。参考要点：设计集成安全扫描的 CI/CD 流水线；规划部署策略（蓝绿部署、金丝雀发布、滚动更新）；创建基础设施即代码模板；设计监控和告警策略。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_3",
+          "type": "collect_info",
+          "name": "第三步：实施落地",
+          "instruction": "将本步骤作为目标而不是固定话术：第三步：实施落地。参考要点：搭建集成自动化测试的 CI/CD 流水线；实现版本化管理的基础设施即代码；配置监控、日志和告警系统；创建灾难恢复和备份自动化。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_4",
+          "type": "collect_info",
+          "name": "第四步：优化与维护",
+          "instruction": "将本步骤作为目标而不是固定话术：第四步：优化与维护。参考要点：监控系统性能并优化资源；实施成本优化策略；创建自动化安全扫描和合规报告；构建具备自动恢复能力的自愈系统。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "answer_user",
+            "handoff_human",
+            "continue_flow"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "source_node_id": "step_1",
+          "next_node_id": "step_2",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        },
+        {
+          "source_node_id": "step_2",
+          "next_node_id": "step_3",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        },
+        {
+          "source_node_id": "step_3",
+          "next_node_id": "step_4",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        }
+      ],
+      "start_node_id": "step_1",
+      "terminal_node_ids": [
+        "step_4"
+      ],
+      "interruption_policy": {
+        "related_question": "可以临时回答，回答后回到当前流程。",
+        "unrelated_business": "可以切换到新技能，并保存当前流程进度。",
+        "chitchat": "简短回应后，引导用户继续当前流程。",
+        "user_wants_human": "直接转人工。"
+      }
+    },
+    "status": "published"
+  },
+  {
+    "content": {
+      "skill_id": "ai_app_engineer_sop",
+      "name": "AI 应用工程流程",
+      "version": "1.0.0",
+      "business_domain": "ai_engineering",
+      "description": "AI 应用工程师的标准工作流程：问题定义与数据审计 → 实验迭代 → 工程化与部署 → 线上验证与迭代。",
+      "trigger_intents": [
+        "AI 应用",
+        "模型开发",
+        "RAG 方案",
+        "Prompt 设计",
+        "LLM 应用",
+        "模型部署"
+      ],
+      "user_utterance_examples": [
+        "帮我AI 应用",
+        "我要模型开发"
+      ],
+      "goal": [
+        "问题定义与数据审计",
+        "实验迭代",
+        "工程化与部署",
+        "线上验证与迭代"
+      ],
+      "required_info": [],
+      "slot_filling_policy": {
+        "enabled": true,
+        "multi_slot_per_turn": true,
+        "extract_scope": "all_skill_expected_user_info",
+        "skip_satisfied_steps": true,
+        "description": "每轮同时抽取用户已表达的信息，已满足的信息不再追问。",
+        "target_info": []
+      },
+      "response_rules": [
+        "输出结构化结果，关键结论带依据或数据。",
+        "信息不足时先追问，不要臆测。",
+        "超出职责边界的情况转人工并附上已收集的上下文。"
+      ],
+      "nodes": [
+        {
+          "node_id": "step_1",
+          "type": "collect_info",
+          "name": "问题定义与数据审计",
+          "instruction": "将本步骤作为目标而不是固定话术：问题定义与数据审计。参考要点：明确业务目标和评估指标，定义在什么数据集、什么场景下；数据质量审计（分布、缺失值、标注一致性）；确定 baseline：规则方案或已有模型的效果。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_clarification",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_2",
+          "type": "collect_info",
+          "name": "实验迭代",
+          "instruction": "将本步骤作为目标而不是固定话术：实验迭代。参考要点：搭建可复现的实验管线（随机种子、环境依赖、数据版本全部锁定）；快速迭代：先跑通 pipeline 再优化单点；离线评估要全面：precision/recall/F1 之外关注分布外样本和边界情况。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_3",
+          "type": "collect_info",
+          "name": "工程化与部署",
+          "instruction": "将本步骤作为目标而不是固定话术：工程化与部署。参考要点：模型打包：Docker 镜像 + 模型权重版本化；性能优化：推理延迟和吞吐量满足 SLA；搭建监控：请求量、延迟、错误率、模型指标；模型上线前必须过 shadow mode 对比线上 baseline。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_4",
+          "type": "collect_info",
+          "name": "线上验证与迭代",
+          "instruction": "将本步骤作为目标而不是固定话术：线上验证与迭代。参考要点：Shadow mode 验证线上效果；A/B 测试确认业务指标提升；建立数据回流机制持续优化模型；推理服务必须有降级策略。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "answer_user",
+            "handoff_human",
+            "continue_flow"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "source_node_id": "step_1",
+          "next_node_id": "step_2",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        },
+        {
+          "source_node_id": "step_2",
+          "next_node_id": "step_3",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        },
+        {
+          "source_node_id": "step_3",
+          "next_node_id": "step_4",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        }
+      ],
+      "start_node_id": "step_1",
+      "terminal_node_ids": [
+        "step_4"
+      ],
+      "interruption_policy": {
+        "related_question": "可以临时回答，回答后回到当前流程。",
+        "unrelated_business": "可以切换到新技能，并保存当前流程进度。",
+        "chitchat": "简短回应后，引导用户继续当前流程。",
+        "user_wants_human": "直接转人工。"
+      }
+    },
+    "status": "published"
+  },
+  {
+    "content": {
+      "skill_id": "security_architect_sop",
+      "name": "安全架构评审流程",
+      "version": "1.0.0",
+      "business_domain": "security",
+      "description": "安全架构师的标准工作流程：收集系统上下文与资产清单 → 威胁建模与攻击面分析 → 安全设计评审与漏洞评估 → 交付安全架构建议与加固方案。",
+      "trigger_intents": [
+        "安全架构",
+        "威胁建模",
+        "安全评审",
+        "安全设计",
+        "加固方案",
+        "安全合规"
+      ],
+      "user_utterance_examples": [
+        "帮我安全架构",
+        "我要威胁建模"
+      ],
+      "goal": [
+        "收集系统上下文与资产清单",
+        "威胁建模与攻击面分析",
+        "安全设计评审与漏洞评估",
+        "交付安全架构建议与加固方案"
+      ],
+      "required_info": [],
+      "slot_filling_policy": {
+        "enabled": true,
+        "multi_slot_per_turn": true,
+        "extract_scope": "all_skill_expected_user_info",
+        "skip_satisfied_steps": true,
+        "description": "每轮同时抽取用户已表达的信息，已满足的信息不再追问。",
+        "target_info": []
+      },
+      "response_rules": [
+        "输出结构化结果，关键结论带依据或数据。",
+        "信息不足时先追问，不要臆测。",
+        "超出职责边界的情况转人工并附上已收集的上下文。"
+      ],
+      "nodes": [
+        {
+          "node_id": "step_1",
+          "type": "collect_info",
+          "name": "收集系统上下文与资产清单",
+          "instruction": "将本步骤作为目标而不是固定话术：收集系统上下文与资产清单。参考要点：确认系统架构、技术栈、部署形态、数据流与信任边界；识别资产、用户角色与权限模型；确认合规要求（等保/ISO/行业规范）。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_clarification",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_2",
+          "type": "collect_info",
+          "name": "威胁建模与攻击面分析",
+          "instruction": "将本步骤作为目标而不是固定话术：威胁建模与攻击面分析。参考要点：用对抗式思维追问：什么会被滥用、失效时会发生什么、谁会从攻破中获益、爆炸半径多大；按 STRIDE 或 OWASP Top 10 识别威胁并排出优先级。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_3",
+          "type": "collect_info",
+          "name": "安全设计评审与漏洞评估",
+          "instruction": "将本步骤作为目标而不是固定话术：安全设计评审与漏洞评估。参考要点：评审身份认证（OAuth 2.0+PKCE/WebAuthn/MFA）、授权模型（RBAC/ABAC/ReBAC）、密钥管理、加密方案（TLS 1.3/AES-256-GCM）、输入校验与输出编码；识别漏洞按 CVSS 3.1+ 分级。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_4",
+          "type": "collect_info",
+          "name": "交付安全架构建议与加固方案",
+          "instruction": "将本步骤作为目标而不是固定话术：交付安全架构建议与加固方案。参考要点：输出威胁模型文档、风险清单（含严重性评级、可利用性证明、具体修复方案）与零信任/纵深防御加固建议；每条发现必须附带具体修复路径。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "answer_user",
+            "handoff_human",
+            "continue_flow"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "source_node_id": "step_1",
+          "next_node_id": "step_2",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        },
+        {
+          "source_node_id": "step_2",
+          "next_node_id": "step_3",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        },
+        {
+          "source_node_id": "step_3",
+          "next_node_id": "step_4",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        }
+      ],
+      "start_node_id": "step_1",
+      "terminal_node_ids": [
+        "step_4"
+      ],
+      "interruption_policy": {
+        "related_question": "可以临时回答，回答后回到当前流程。",
+        "unrelated_business": "可以切换到新技能，并保存当前流程进度。",
+        "chitchat": "简短回应后，引导用户继续当前流程。",
+        "user_wants_human": "直接转人工。"
+      }
+    },
+    "status": "published"
+  },
+  {
+    "content": {
+      "skill_id": "penetration_test_sop",
+      "name": "渗透测试流程",
+      "version": "1.0.0",
+      "business_domain": "security",
+      "description": "渗透测试工程师的标准工作流程：确认授权范围与测试边界 → 侦察与攻击面测绘 → 漏洞利用与权限提升验证 → 交付渗透测试报告。",
+      "trigger_intents": [
+        "渗透测试",
+        "安全测试",
+        "漏洞扫描",
+        "攻击面评估",
+        "红队测试"
+      ],
+      "user_utterance_examples": [
+        "帮我渗透测试",
+        "我要安全测试"
+      ],
+      "goal": [
+        "确认授权范围与测试边界",
+        "侦察与攻击面测绘",
+        "漏洞利用与权限提升验证",
+        "交付渗透测试报告"
+      ],
+      "required_info": [],
+      "slot_filling_policy": {
+        "enabled": true,
+        "multi_slot_per_turn": true,
+        "extract_scope": "all_skill_expected_user_info",
+        "skip_satisfied_steps": true,
+        "description": "每轮同时抽取用户已表达的信息，已满足的信息不再追问。",
+        "target_info": []
+      },
+      "response_rules": [
+        "输出结构化结果，关键结论带依据或数据。",
+        "信息不足时先追问，不要臆测。",
+        "超出职责边界的情况转人工并附上已收集的上下文。"
+      ],
+      "nodes": [
+        {
+          "node_id": "step_1",
+          "type": "collect_info",
+          "name": "确认授权范围与测试边界",
+          "instruction": "将本步骤作为目标而不是固定话术：确认授权范围与测试边界。参考要点：确认测试目标、授权范围、时间窗口与禁止操作（不破坏生产数据、不触发真实业务影响）；确认测试方法和标准（OWASP/PTES）。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_clarification",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_2",
+          "type": "collect_info",
+          "name": "侦察与攻击面测绘",
+          "instruction": "将本步骤作为目标而不是固定话术：侦察与攻击面测绘。参考要点：枚举对外可见资产：子域名、开放端口、暴露服务、泄露凭据、云存储错误配置；开展 OSINT；识别信任关系与横向移动路径。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_3",
+          "type": "collect_info",
+          "name": "漏洞利用与权限提升验证",
+          "instruction": "将本步骤作为目标而不是固定话术：漏洞利用与权限提升验证。参考要点：按方法论测试 Web/API（注入、XSS、CSRF、SSRF、IDOR、认证授权缺陷）、云配置与容器安全；串连低危发现为高影响攻击链，演示真实影响但控制在授权范围内。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_4",
+          "type": "collect_info",
+          "name": "交付渗透测试报告",
+          "instruction": "将本步骤作为目标而不是固定话术：交付渗透测试报告。参考要点：输出渗透测试报告：每个发现附完整攻击链（从初始访问到业务影响）、严重性评级（CVSS 3.1+）、复现步骤与修复建议；不公开敏感细节。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "answer_user",
+            "handoff_human",
+            "continue_flow"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "source_node_id": "step_1",
+          "next_node_id": "step_2",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        },
+        {
+          "source_node_id": "step_2",
+          "next_node_id": "step_3",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        },
+        {
+          "source_node_id": "step_3",
+          "next_node_id": "step_4",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        }
+      ],
+      "start_node_id": "step_1",
+      "terminal_node_ids": [
+        "step_4"
+      ],
+      "interruption_policy": {
+        "related_question": "可以临时回答，回答后回到当前流程。",
+        "unrelated_business": "可以切换到新技能，并保存当前流程进度。",
+        "chitchat": "简短回应后，引导用户继续当前流程。",
+        "user_wants_human": "直接转人工。"
+      }
+    },
+    "status": "published"
+  },
+  {
+    "content": {
+      "skill_id": "frontend_dev_sop",
+      "name": "前端开发流程",
+      "version": "1.0.0",
+      "business_domain": "frontend",
+      "description": "前端开发工程师的标准工作流程：项目搭建与架构 → 组件开发 → 性能优化 → 测试与质量保证。",
+      "trigger_intents": [
+        "前端开发",
+        "React 组件",
+        "页面实现",
+        "UI 实现",
+        "前端优化"
+      ],
+      "user_utterance_examples": [
+        "帮我前端开发",
+        "我要React 组件"
+      ],
+      "goal": [
+        "项目搭建与架构",
+        "组件开发",
+        "性能优化",
+        "测试与质量保证"
+      ],
+      "required_info": [],
+      "slot_filling_policy": {
+        "enabled": true,
+        "multi_slot_per_turn": true,
+        "extract_scope": "all_skill_expected_user_info",
+        "skip_satisfied_steps": true,
+        "description": "每轮同时抽取用户已表达的信息，已满足的信息不再追问。",
+        "target_info": []
+      },
+      "response_rules": [
+        "输出结构化结果，关键结论带依据或数据。",
+        "信息不足时先追问，不要臆测。",
+        "超出职责边界的情况转人工并附上已收集的上下文。"
+      ],
+      "nodes": [
+        {
+          "node_id": "step_1",
+          "type": "collect_info",
+          "name": "项目搭建与架构",
+          "instruction": "将本步骤作为目标而不是固定话术：项目搭建与架构。参考要点：使用适当的工具搭建现代开发环境；配置构建优化和性能监控；建立测试框架和 CI/CD 集成；创建组件架构和设计系统基础。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_clarification",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_2",
+          "type": "collect_info",
+          "name": "组件开发",
+          "instruction": "将本步骤作为目标而不是固定话术：组件开发。参考要点：创建带有适当 TypeScript 类型的可复用组件库；使用移动优先方法实现响应式设计；从一开始就将无障碍性构建到组件中。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_3",
+          "type": "collect_info",
+          "name": "性能优化",
+          "instruction": "将本步骤作为目标而不是固定话术：性能优化。参考要点：实施代码拆分和懒加载策略；优化图片和资源以适应 Web 交付；监控 Core Web Vitals（LCP < 2.5s, FID < 100ms, CLS < 0.1）并相应优化；设置性能预算和监控。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_4",
+          "type": "collect_info",
+          "name": "测试与质量保证",
+          "instruction": "将本步骤作为目标而不是固定话术：测试与质量保证。参考要点：编写全面的单元测试和集成测试；使用真实辅助技术进行无障碍测试；测试跨浏览器兼容性和响应式行为；为关键用户流程实施端到端测试。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "answer_user",
+            "handoff_human",
+            "continue_flow"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "source_node_id": "step_1",
+          "next_node_id": "step_2",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        },
+        {
+          "source_node_id": "step_2",
+          "next_node_id": "step_3",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        },
+        {
+          "source_node_id": "step_3",
+          "next_node_id": "step_4",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        }
+      ],
+      "start_node_id": "step_1",
+      "terminal_node_ids": [
+        "step_4"
+      ],
+      "interruption_policy": {
+        "related_question": "可以临时回答，回答后回到当前流程。",
+        "unrelated_business": "可以切换到新技能，并保存当前流程进度。",
+        "chitchat": "简短回应后，引导用户继续当前流程。",
+        "user_wants_human": "直接转人工。"
+      }
+    },
+    "status": "published"
+  },
+  {
+    "content": {
+      "skill_id": "database_optimize_sop",
+      "name": "数据库优化流程",
+      "version": "1.0.0",
+      "business_domain": "database",
+      "description": "数据库优化工程师的标准工作流程：收集慢查询与 Schema 上下文 → 诊断查询计划与瓶颈 → 制定索引与 Schema 优化方案 → 交付优化结果与迁移建议。",
+      "trigger_intents": [
+        "数据库优化",
+        "慢查询",
+        "索引优化",
+        "Schema 设计",
+        "查询优化"
+      ],
+      "user_utterance_examples": [
+        "帮我数据库优化",
+        "我要慢查询"
+      ],
+      "goal": [
+        "收集慢查询与 Schema 上下文",
+        "诊断查询计划与瓶颈",
+        "制定索引与 Schema 优化方案",
+        "交付优化结果与迁移建议"
+      ],
+      "required_info": [],
+      "slot_filling_policy": {
+        "enabled": true,
+        "multi_slot_per_turn": true,
+        "extract_scope": "all_skill_expected_user_info",
+        "skip_satisfied_steps": true,
+        "description": "每轮同时抽取用户已表达的信息，已满足的信息不再追问。",
+        "target_info": []
+      },
+      "response_rules": [
+        "输出结构化结果，关键结论带依据或数据。",
+        "信息不足时先追问，不要臆测。",
+        "超出职责边界的情况转人工并附上已收集的上下文。"
+      ],
+      "nodes": [
+        {
+          "node_id": "step_1",
+          "type": "collect_info",
+          "name": "收集慢查询与 Schema 上下文",
+          "instruction": "将本步骤作为目标而不是固定话术：收集慢查询与 Schema 上下文。参考要点：收集慢查询日志、EXPLAIN ANALYZE 输出、当前 Schema 结构、表数据量与增长趋势；确认业务查询模式（读多写多/高频热点）。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_clarification",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_2",
+          "type": "collect_info",
+          "name": "诊断查询计划与瓶颈",
+          "instruction": "将本步骤作为目标而不是固定话术：诊断查询计划与瓶颈。参考要点：解读查询计划定位瓶颈：全表扫描、缺失索引、N+1 查询、连接顺序、锁竞争；用 EXPLAIN ANALYZE 验证假设。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_3",
+          "type": "collect_info",
+          "name": "制定索引与 Schema 优化方案",
+          "instruction": "将本步骤作为目标而不是固定话术：制定索引与 Schema 优化方案。参考要点：设计索引策略（B-tree/GiST/GIN/部分索引/复合索引覆盖过滤+排序）；必要时做 Schema 规范化与反规范化权衡；外键必须有索引。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_4",
+          "type": "collect_info",
+          "name": "交付优化结果与迁移建议",
+          "instruction": "将本步骤作为目标而不是固定话术：交付优化结果与迁移建议。参考要点：输出优化清单（每个优化点带预期收益）、可回滚的迁移方案（零停机部署）、验证脚本；慢查询优化后复测确认。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "answer_user",
+            "handoff_human",
+            "continue_flow"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "source_node_id": "step_1",
+          "next_node_id": "step_2",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        },
+        {
+          "source_node_id": "step_2",
+          "next_node_id": "step_3",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        },
+        {
+          "source_node_id": "step_3",
+          "next_node_id": "step_4",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        }
+      ],
+      "start_node_id": "step_1",
+      "terminal_node_ids": [
+        "step_4"
+      ],
+      "interruption_policy": {
+        "related_question": "可以临时回答，回答后回到当前流程。",
+        "unrelated_business": "可以切换到新技能，并保存当前流程进度。",
+        "chitchat": "简短回应后，引导用户继续当前流程。",
+        "user_wants_human": "直接转人工。"
+      }
+    },
+    "status": "published"
+  },
+  {
+    "content": {
+      "skill_id": "product_manage_sop",
+      "name": "产品管理流程",
+      "version": "1.0.0",
+      "business_domain": "product",
+      "description": "产品经理的标准工作流程：需求发现与问题定义 → 方案设计与 PRD 撰写 → 干系人对齐与路线图排期 → 交付与度量迭代。",
+      "trigger_intents": [
+        "产品规划",
+        "需求分析",
+        "PRD",
+        "路线图",
+        "产品方案",
+        "需求评审"
+      ],
+      "user_utterance_examples": [
+        "帮我产品规划",
+        "我要需求分析"
+      ],
+      "goal": [
+        "需求发现与问题定义",
+        "方案设计与 PRD 撰写",
+        "干系人对齐与路线图排期",
+        "交付与度量迭代"
+      ],
+      "required_info": [],
+      "slot_filling_policy": {
+        "enabled": true,
+        "multi_slot_per_turn": true,
+        "extract_scope": "all_skill_expected_user_info",
+        "skip_satisfied_steps": true,
+        "description": "每轮同时抽取用户已表达的信息，已满足的信息不再追问。",
+        "target_info": []
+      },
+      "response_rules": [
+        "输出结构化结果，关键结论带依据或数据。",
+        "信息不足时先追问，不要臆测。",
+        "超出职责边界的情况转人工并附上已收集的上下文。"
+      ],
+      "nodes": [
+        {
+          "node_id": "step_1",
+          "type": "collect_info",
+          "name": "需求发现与问题定义",
+          "instruction": "将本步骤作为目标而不是固定话术：需求发现与问题定义。参考要点：先找问题不要先跳方案：识别底层用户痛点或业务目标，至少追问三次为什么；用用户访谈/行为数据/客服信号/竞争压力验证需求假设；确认成功指标。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_clarification",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_2",
+          "type": "collect_info",
+          "name": "方案设计与 PRD 撰写",
+          "instruction": "将本步骤作为目标而不是固定话术：方案设计与 PRD 撰写。参考要点：先写新闻稿再写 PRD：用一段话说明用户为什么在意；PRD 含问题陈述、目标与成功指标、Non-Goals、用户画像与故事、方案概述、技术考量、发布计划。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_3",
+          "type": "collect_info",
+          "name": "干系人对齐与路线图排期",
+          "instruction": "将本步骤作为目标而不是固定话术：干系人对齐与路线图排期。参考要点：路线图每项必须有负责人、成功指标和时间范围；与工程/设计/销售/支持对齐，明确取舍；记录变更请求对照 Sprint 目标接受/延后/拒绝。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "ask_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "step_4",
+          "type": "collect_info",
+          "name": "交付与度量迭代",
+          "instruction": "将本步骤作为目标而不是固定话术：交付与度量迭代。参考要点：交付 PRD 与路线图并持续沟通进度（意外就是失败，过度沟通）；上线之后必度量：跟踪指标验证假设，形成反馈闭环。已满足的信息不再重复追问，缺失信息优先从已有上下文提取，仍缺失时仅追问缺失项。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "answer_user",
+            "handoff_human",
+            "continue_flow"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "source_node_id": "step_1",
+          "next_node_id": "step_2",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        },
+        {
+          "source_node_id": "step_2",
+          "next_node_id": "step_3",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        },
+        {
+          "source_node_id": "step_3",
+          "next_node_id": "step_4",
+          "condition": null,
+          "priority": 0,
+          "label": null
+        }
+      ],
+      "start_node_id": "step_1",
+      "terminal_node_ids": [
+        "step_4"
+      ],
+      "interruption_policy": {
+        "related_question": "可以临时回答，回答后回到当前流程。",
+        "unrelated_business": "可以切换到新技能，并保存当前流程进度。",
+        "chitchat": "简短回应后，引导用户继续当前流程。",
+        "user_wants_human": "直接转人工。"
+      }
+    },
+    "status": "published"
+  },
+  {
+    "tenant_id": null,
+    "content": {
+      "skill_id": "openspec_propose_sop",
+      "name": "OpenSpec 规范提案流程",
+      "version": "1.0.0",
+      "business_domain": "product",
+      "description": "规范驱动开发（SDD）的变更提案流程：需求收集与场景化 → 撰写 proposal.md（Requirement 带 WHEN/THEN 场景）→ 干系人评审门禁。",
+      "trigger_intents": [
+        "规范提案",
+        "openspec",
+        "变更提案",
+        "proposal",
+        "需求规格",
+        "场景化需求"
+      ],
+      "user_utterance_examples": [
+        "把客户需求写成规范提案",
+        "按 OpenSpec 流程走变更提案",
+        "这个需求怎么场景化"
+      ],
+      "goal": [
+        "收集需求上下文与成功指标",
+        "将需求拆解为可验证的 WHEN/THEN 场景",
+        "撰写 proposal.md（含 SHALL/SHOULD/MAY 措辞的 Requirement）",
+        "干系人评审确认后交接"
+      ],
+      "required_info": [
+        "problem_statement",
+        "target_users",
+        "success_metrics"
+      ],
+      "slot_filling_policy": {
+        "enabled": true,
+        "multi_slot_per_turn": true,
+        "extract_scope": "all_skill_expected_user_info",
+        "skip_satisfied_steps": true,
+        "description": "每轮同时抽取问题陈述、目标用户、成功指标、约束与边界等信息，已满足的信息不再追问。",
+        "target_info": [
+          "problem_statement",
+          "target_users",
+          "success_metrics",
+          "constraints"
+        ]
+      },
+      "response_rules": [
+        "先找问题不要先跳方案：识别底层痛点或业务目标，至少追问三次为什么。",
+        "每个 Requirement 必须带可验证的 Scenario（WHEN...THEN...），不可验证的需求不写入提案。",
+        "规范动词必须准确：SHALL=必须满足、SHOULD=应当满足、MAY=可以满足，不得混用。",
+        "提案必须包含 Non-Goals，明确本次变更不做的事。",
+        "成功指标必须可度量，不能使用模糊表述。",
+        "需求存在冲突或超出平台能力时转人工并附上已收集的上下文。"
+      ],
+      "nodes": [
+        {
+          "node_id": "collect_context",
+          "name": "收集需求上下文",
+          "instruction": "将本步骤作为目标而不是固定话术：识别需求来源（客户/内部/竞品/数据信号），澄清问题陈述、目标用户、成功指标与约束边界。参考要点：先找问题不要先跳方案，至少追问三次为什么；用数据或案例验证需求假设。已满足的信息不再重复追问，仍缺失时仅追问缺失项。",
+          "expected_user_info": [
+            "problem_statement",
+            "target_users",
+            "success_metrics",
+            "constraints"
+          ],
+          "allowed_actions": [
+            "ask_clarification",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "scenario_breakdown",
+          "name": "需求场景化拆解",
+          "instruction": "将本步骤作为目标而不是固定话术：把需求拆解为可验证的 WHEN/THEN 场景列表，每个场景包含前置条件、触发动作、预期结果；参考成功案例库中的既有规范样例。参考要点：场景粒度要可被测试验收直接映射；识别边界场景与异常路径。已满足的信息不再重复追问，仍缺失时仅追问缺失项。",
+          "expected_user_info": [
+            "scenarios"
+          ],
+          "allowed_actions": [
+            "knowledge_query",
+            "ask_user",
+            "continue_flow"
+          ],
+          "knowledge_scope": {
+            "buckets": [
+              "success_cases"
+            ]
+          }
+        },
+        {
+          "node_id": "write_proposal",
+          "name": "撰写 proposal.md",
+          "instruction": "将本步骤作为目标而不是固定话术：产出 OpenSpec 规范的 proposal.md，结构含：问题陈述、目标与成功指标、需求规格（每条 Requirement 用 SHALL/SHOULD/MAY 措辞并带 Scenario WHEN/THEN）、Non-Goals、变更影响范围。参考要点：每个需求都能被 WHEN/THEN 场景验证；不写实现细节（那是 design.md 的职责）。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "answer_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "review_gate",
+          "name": "干系人评审门禁",
+          "instruction": "将本步骤作为目标而不是固定话术：把 proposal.md 交给干系人评审（人工确认），确认范围、优先级与可验证性；评审通过则输出最终提案交接给方案架构师，不通过则收集反馈修订后再评审。参考要点：记录变更请求并明确接受/延后/拒绝。",
+          "expected_user_info": [
+            "review_decision"
+          ],
+          "allowed_actions": [
+            "answer_user",
+            "handoff_human",
+            "continue_flow"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "source_node_id": "collect_context",
+          "next_node_id": "scenario_breakdown",
+          "condition": null,
+          "priority": 0,
+          "label": "上下文完整"
+        },
+        {
+          "source_node_id": "scenario_breakdown",
+          "next_node_id": "write_proposal",
+          "condition": null,
+          "priority": 0,
+          "label": "场景化完成"
+        },
+        {
+          "source_node_id": "write_proposal",
+          "next_node_id": "review_gate",
+          "condition": null,
+          "priority": 0,
+          "label": "提案完成"
+        }
+      ],
+      "start_node_id": "collect_context",
+      "terminal_node_ids": [
+        "review_gate"
+      ],
+      "interruption_policy": {
+        "related_question": "可以临时回答，回答后回到当前流程。",
+        "unrelated_business": "可以切换到新技能，并保存当前流程进度。",
+        "chitchat": "简短回应后，引导用户继续当前流程。",
+        "user_wants_human": "直接转人工。"
+      }
+    },
+    "status": "published"
+  },
+  {
+    "tenant_id": null,
+    "content": {
+      "skill_id": "openspec_design_sop",
+      "name": "OpenSpec 设计实现流程",
+      "version": "1.0.0",
+      "business_domain": "delivery",
+      "description": "规范驱动开发（SDD）的设计与实现流程：审阅 proposal 规范 → 设计技术方案 → 撰写 design.md 与 tasks.md → 设计评审门禁。",
+      "trigger_intents": [
+        "规范设计",
+        "openspec 设计",
+        "design.md",
+        "设计任务拆解",
+        "按规范实现"
+      ],
+      "user_utterance_examples": [
+        "根据提案写设计文档",
+        "把规范转成开发任务",
+        "按 OpenSpec 流程设计实现方案"
+      ],
+      "goal": [
+        "审阅 proposal 与既有规范",
+        "设计技术方案（架构/数据/接口）",
+        "撰写 design.md 与 tasks.md",
+        "设计评审门禁后交接编码"
+      ],
+      "required_info": [
+        "proposal_content"
+      ],
+      "slot_filling_policy": {
+        "enabled": true,
+        "multi_slot_per_turn": true,
+        "extract_scope": "all_skill_expected_user_info",
+        "skip_satisfied_steps": true,
+        "description": "每轮抽取提案内容、技术约束、既有系统上下文等信息，已满足的信息不再追问。",
+        "target_info": [
+          "proposal_content",
+          "tech_constraints"
+        ]
+      },
+      "response_rules": [
+        "设计必须逐条响应 proposal 中的 Requirement，不能遗漏或跳过任何 SHALL 项。",
+        "design.md 只描述怎么做（技术方案），不重写需求；需求变更需回到提案流程。",
+        "tasks.md 的任务必须可独立验证，每个任务标注对应需求编号与验收标准。",
+        "涉及平台能力（SOP/知识库/工具/通用技能）时引用技术知识库，不臆造不存在的功能。",
+        "设计存在重大不确定性或需求歧义时转人工并附上提案上下文。"
+      ],
+      "nodes": [
+        {
+          "node_id": "review_proposal",
+          "name": "审阅规范提案",
+          "instruction": "将本步骤作为目标而不是固定话术：通读 proposal.md，逐条列出 Requirement（含 WHEN/THEN 场景）作为设计输入清单；识别技术约束与既有系统上下文。参考要点：需求不清晰或场景缺失时先返回产品经理澄清，不要自行脑补需求。",
+          "expected_user_info": [
+            "proposal_content",
+            "tech_constraints"
+          ],
+          "allowed_actions": [
+            "knowledge_query",
+            "ask_clarification",
+            "continue_flow"
+          ],
+          "knowledge_scope": {
+            "buckets": [
+              "tech_knowledge"
+            ]
+          }
+        },
+        {
+          "node_id": "design_solution",
+          "name": "设计技术方案",
+          "instruction": "将本步骤作为目标而不是固定话术：针对每条 Requirement 设计技术方案：总体架构、数据模型、接口契约、组件划分；智能体项目需明确员工/SOP/知识库/工具规划。参考要点：引用技术知识库中的架构模式与交付流程制度库中的标准；方案必须能覆盖所有 SHALL 场景。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "knowledge_query",
+            "ask_user",
+            "continue_flow"
+          ],
+          "knowledge_scope": {
+            "buckets": [
+              "tech_knowledge",
+              "delivery_process"
+            ]
+          }
+        },
+        {
+          "node_id": "write_design_tasks",
+          "name": "撰写 design.md 与 tasks.md",
+          "instruction": "将本步骤作为目标而不是固定话术：产出 design.md（技术方案、数据模型、接口定义、风险与回退）与 tasks.md（按依赖排序的任务清单，每项含需求编号、验收标准、负责人建议）。参考要点：任务粒度适中可独立验证；明确阶段划分与里程碑。",
+          "expected_user_info": [],
+          "allowed_actions": [
+            "answer_user",
+            "continue_flow"
+          ]
+        },
+        {
+          "node_id": "design_gate",
+          "name": "设计评审门禁",
+          "instruction": "将本步骤作为目标而不是固定话术：把 design.md 与 tasks.md 交给人工评审确认；评审通过则交接编码阶段（软件工程师/AI 应用工程师），不通过则收集意见修订。参考要点：评审重点=需求覆盖完整性、接口契约清晰度、任务可验收性。",
+          "expected_user_info": [
+            "design_decision"
+          ],
+          "allowed_actions": [
+            "answer_user",
+            "handoff_human",
+            "continue_flow"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "source_node_id": "review_proposal",
+          "next_node_id": "design_solution",
+          "condition": null,
+          "priority": 0,
+          "label": "提案审阅完成"
+        },
+        {
+          "source_node_id": "design_solution",
+          "next_node_id": "write_design_tasks",
+          "condition": null,
+          "priority": 0,
+          "label": "方案确定"
+        },
+        {
+          "source_node_id": "write_design_tasks",
+          "next_node_id": "design_gate",
+          "condition": null,
+          "priority": 0,
+          "label": "文档完成"
+        }
+      ],
+      "start_node_id": "review_proposal",
+      "terminal_node_ids": [
+        "design_gate"
+      ],
+      "interruption_policy": {
+        "related_question": "可以临时回答，回答后回到当前流程。",
+        "unrelated_business": "可以切换到新技能，并保存当前流程进度。",
+        "chitchat": "简短回应后，引导用户继续当前流程。",
+        "user_wants_human": "直接转人工。"
+      }
+    },
+    "status": "published"
+  }
+]

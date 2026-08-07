@@ -1,0 +1,781 @@
+[
+  {
+    "name": "crm.lead.register",
+    "display_name": "CRM 线索登记",
+    "description": "登记售前销售线索：公司名、行业、场景、预算、联系方式。",
+    "bucket": "售前工具",
+    "tool_type": "http",
+    "method": "POST",
+    "url": "https://your-crm.example.com/api/leads",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "auth": {
+      "type": "bearer",
+      "token_env": "CRM_API_TOKEN"
+    },
+    "execution_policy": {
+      "timeout_seconds": 15
+    },
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "company_name",
+        "industry",
+        "contact_info"
+      ],
+      "properties": {
+        "company_name": {
+          "type": "string",
+          "description": "客户公司名"
+        },
+        "industry": {
+          "type": "string",
+          "description": "所属行业"
+        },
+        "business_scenario": {
+          "type": "string",
+          "description": "业务场景"
+        },
+        "budget_range": {
+          "type": "string",
+          "description": "预算范围"
+        },
+        "contact_info": {
+          "type": "string",
+          "description": "联系方式"
+        },
+        "intent": {
+          "type": "string",
+          "description": "客户意图"
+        }
+      }
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "lead_id": {
+          "type": "string",
+          "description": "线索 ID"
+        },
+        "status": {
+          "type": "string",
+          "description": "登记状态"
+        }
+      }
+    },
+    "allowed_skills": [],
+    "enabled": true
+  },
+  {
+    "name": "project.progress.query",
+    "display_name": "项目进度查询",
+    "description": "查询项目台账：在管项目、计划/实际完成率、计划交付日、风险标记。",
+    "bucket": "交付工具",
+    "tool_type": "http",
+    "method": "GET",
+    "url": "https://your-pm.example.com/api/projects/progress",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "auth": {
+      "type": "bearer",
+      "token_env": "PM_API_TOKEN"
+    },
+    "execution_policy": {
+      "timeout_seconds": 15
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "all",
+            "delayed"
+          ],
+          "description": "项目状态过滤"
+        }
+      }
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "projects": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "project_name": {
+                "type": "string"
+              },
+              "planned_progress": {
+                "type": "number"
+              },
+              "actual_progress": {
+                "type": "number"
+              },
+              "due_date": {
+                "type": "string"
+              },
+              "risk_flag": {
+                "type": "string"
+              },
+              "owner": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "allowed_skills": [],
+    "enabled": true
+  },
+  {
+    "name": "report.weekly.push",
+    "display_name": "周报推送",
+    "description": "推送项目周报/巡检结论到周报系统或群机器人。",
+    "bucket": "交付工具",
+    "tool_type": "http",
+    "method": "POST",
+    "url": "https://your-pm.example.com/api/reports/weekly",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "auth": {
+      "type": "bearer",
+      "token_env": "PM_API_TOKEN"
+    },
+    "execution_policy": {
+      "timeout_seconds": 15
+    },
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "content"
+      ],
+      "properties": {
+        "content": {
+          "type": "string",
+          "description": "周报 Markdown 内容"
+        },
+        "report_week": {
+          "type": "string",
+          "description": "周报周期"
+        },
+        "channel": {
+          "type": "string",
+          "description": "推送渠道"
+        }
+      }
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "report_id": {
+          "type": "string"
+        },
+        "pushed_at": {
+          "type": "string"
+        }
+      }
+    },
+    "allowed_skills": [],
+    "enabled": true
+  },
+  {
+    "name": "code.review",
+    "display_name": "代码审查辅助",
+    "description": "代码审查辅助通用技能（执行型）：输入代码片段，输出问题定位、风险等级与修改建议。",
+    "bucket": "研发工具",
+    "tool_type": "http",
+    "method": "POST",
+    "url": "https://your-internal.example.com/api/code/review",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "auth": {
+      "type": "bearer",
+      "token_env": "INTERNAL_API_TOKEN"
+    },
+    "execution_policy": {
+      "timeout_seconds": 60
+    },
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "code"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "待审查代码"
+        },
+        "language": {
+          "type": "string",
+          "description": "编程语言"
+        }
+      }
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "summary": {
+          "type": "string"
+        }
+      }
+    },
+    "allowed_skills": [
+      "tech_support_sop"
+    ],
+    "enabled": true
+  },
+  {
+    "name": "api.example",
+    "display_name": "API 集成示例生成",
+    "description": "API 集成示例生成通用技能（执行型）：输入 API 文档或需求，输出调用示例代码。",
+    "bucket": "研发工具",
+    "tool_type": "http",
+    "method": "POST",
+    "url": "https://your-internal.example.com/api/api-example",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "auth": {
+      "type": "bearer",
+      "token_env": "INTERNAL_API_TOKEN"
+    },
+    "execution_policy": {
+      "timeout_seconds": 60
+    },
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "api_desc"
+      ],
+      "properties": {
+        "api_desc": {
+          "type": "string",
+          "description": "API 描述或文档"
+        },
+        "language": {
+          "type": "string",
+          "description": "示例语言"
+        }
+      }
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "example_code": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
+    "allowed_skills": [
+      "tech_support_sop"
+    ],
+    "enabled": true
+  },
+  {
+    "name": "ticket.handle",
+    "display_name": "工单处理",
+    "description": "工单系统：创建工单、查询工单、更新状态与日志引用。",
+    "bucket": "售后工具",
+    "tool_type": "http",
+    "method": "POST",
+    "url": "https://your-support.example.com/api/tickets",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "auth": {
+      "type": "bearer",
+      "token_env": "SUPPORT_API_TOKEN"
+    },
+    "execution_policy": {
+      "timeout_seconds": 15
+    },
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "action",
+        "payload"
+      ],
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "create",
+            "query",
+            "update"
+          ],
+          "description": "操作类型"
+        },
+        "payload": {
+          "type": "object",
+          "description": "工单数据"
+        }
+      }
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "ticket_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      }
+    },
+    "allowed_skills": [],
+    "enabled": true
+  },
+  {
+    "name": "log.query",
+    "display_name": "日志查询",
+    "description": "查询系统运行日志：按时间、服务、关键字过滤，用于故障排查。",
+    "bucket": "售后工具",
+    "tool_type": "http",
+    "method": "GET",
+    "url": "https://your-logs.example.com/api/logs",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "auth": {
+      "type": "bearer",
+      "token_env": "LOG_API_TOKEN"
+    },
+    "execution_policy": {
+      "timeout_seconds": 20
+    },
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "service"
+      ],
+      "properties": {
+        "service": {
+          "type": "string",
+          "description": "服务名"
+        },
+        "start_time": {
+          "type": "string",
+          "description": "开始时间"
+        },
+        "end_time": {
+          "type": "string",
+          "description": "结束时间"
+        },
+        "keyword": {
+          "type": "string",
+          "description": "关键字"
+        },
+        "level": {
+          "type": "string",
+          "enum": [
+            "error",
+            "warn",
+            "info"
+          ],
+          "description": "日志级别"
+        }
+      }
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "logs": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "total": {
+          "type": "number"
+        }
+      }
+    },
+    "allowed_skills": [],
+    "enabled": true
+  },
+  {
+    "name": "image.generate.gemini",
+    "display_name": "Gemini 图像生成",
+    "description": "调用 Gemini API（Nano Banana Pro）根据文本生成或编辑图像，支持风格迁移与多轮精修。原技能：ce-gemini-imagegen。",
+    "bucket": "设计工具",
+    "tool_type": "http",
+    "method": "POST",
+    "url": "https://your-gemini-proxy.example.com/v1beta/models/nano-banana:generateContent",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "auth": {
+      "type": "bearer",
+      "token_env": "GEMINI_API_KEY"
+    },
+    "execution_policy": {
+      "timeout_seconds": 60
+    },
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "prompt"
+      ],
+      "properties": {
+        "prompt": {
+          "type": "string",
+          "description": "图像生成提示词（含风格/构图/文本要求）"
+        },
+        "mode": {
+          "type": "string",
+          "description": "generate 或 edit"
+        },
+        "reference_image": {
+          "type": "string",
+          "description": "编辑模式参考图 URL"
+        }
+      }
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "image_url": {
+          "type": "string",
+          "description": "生成图像地址"
+        }
+      }
+    },
+    "allowed_skills": [],
+    "enabled": true
+  },
+  {
+    "name": "proof.doc.review",
+    "display_name": "Proof 文档协作评审",
+    "description": "将 Markdown 文档共享到 Proof（proofeditor.ai），查看/评论/编辑/同步评审文档。原技能：ce-proof。",
+    "bucket": "协作工具",
+    "tool_type": "http",
+    "method": "POST",
+    "url": "https://your-proof-bridge.example.com/api/documents",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "auth": {
+      "type": "bearer",
+      "token_env": "PROOF_API_TOKEN"
+    },
+    "execution_policy": {
+      "timeout_seconds": 15
+    },
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "title",
+        "content"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "文档标题"
+        },
+        "content": {
+          "type": "string",
+          "description": "Markdown 内容"
+        },
+        "action": {
+          "type": "string",
+          "description": "share 或 sync"
+        }
+      }
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "doc_id": {
+          "type": "string",
+          "description": "Proof 文档 ID"
+        },
+        "share_url": {
+          "type": "string"
+        }
+      }
+    },
+    "allowed_skills": [],
+    "enabled": true
+  },
+  {
+    "name": "product.pulse",
+    "display_name": "产品运营脉搏",
+    "description": "按时间窗口拉取产品运营数据（使用量/质量/错误信号），生成 Pulse 报告。原技能：ce-product-pulse。",
+    "bucket": "运营工具",
+    "tool_type": "http",
+    "method": "POST",
+    "url": "https://your-analytics.example.com/api/pulse",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "auth": {
+      "type": "bearer",
+      "token_env": "PULSE_API_TOKEN"
+    },
+    "execution_policy": {
+      "timeout_seconds": 30
+    },
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "window"
+      ],
+      "properties": {
+        "window": {
+          "type": "string",
+          "description": "时间窗口，如 24h / 7d"
+        },
+        "topics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "关注主题"
+        }
+      }
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "report": {
+          "type": "string",
+          "description": "Pulse 报告 Markdown"
+        }
+      }
+    },
+    "allowed_skills": [],
+    "enabled": true
+  },
+  {
+    "name": "search.web.last30",
+    "display_name": "近 30 天舆情检索",
+    "description": "检索 Reddit/X/YouTube/TikTok/HN/Polymarket/GitHub 等平台上近 30 天关于指定主题的真实讨论与帖子。原技能：last30days。",
+    "bucket": "情报工具",
+    "tool_type": "http",
+    "method": "POST",
+    "url": "https://your-search-bridge.example.com/api/last30days",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "auth": {
+      "type": "bearer",
+      "token_env": "SEARCH_API_TOKEN"
+    },
+    "execution_policy": {
+      "timeout_seconds": 45
+    },
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "topic"
+      ],
+      "properties": {
+        "topic": {
+          "type": "string",
+          "description": "检索主题"
+        },
+        "platforms": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "限定平台"
+        },
+        "days": {
+          "type": "integer",
+          "description": "回溯天数（默认 30）"
+        }
+      }
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "digest": {
+          "type": "string",
+          "description": "聚合检索摘要"
+        }
+      }
+    },
+    "allowed_skills": [],
+    "enabled": true
+  },
+  {
+    "name": "trend.analyze",
+    "display_name": "趋势分析",
+    "description": "分析指定主题/提示词的近期趋势信号，输出结构化趋势结论。原技能：suno-trend。",
+    "bucket": "情报工具",
+    "tool_type": "http",
+    "method": "POST",
+    "url": "https://your-trend-bridge.example.com/api/trend",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "auth": {
+      "type": "bearer",
+      "token_env": "TREND_API_TOKEN"
+    },
+    "execution_policy": {
+      "timeout_seconds": 30
+    },
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "topic"
+      ],
+      "properties": {
+        "topic": {
+          "type": "string",
+          "description": "分析主题"
+        },
+        "window": {
+          "type": "string",
+          "description": "时间窗口"
+        }
+      }
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "trend_report": {
+          "type": "string",
+          "description": "趋势报告"
+        }
+      }
+    },
+    "allowed_skills": [],
+    "enabled": true
+  },
+  {
+    "name": "slack.search",
+    "display_name": "Slack 组织检索",
+    "description": "搜索 Slack 获取组织上下文（决策/约束/讨论脉络），产出综合研究摘要。原技能：ce-slack-research。需 Slack MCP Server。",
+    "bucket": "协作工具",
+    "tool_type": "mcp",
+    "method": "POST",
+    "url": "https://your-slack-mcp.example.com/mcp",
+    "headers": {},
+    "auth": {},
+    "mcp_config": {
+      "server": "slack",
+      "transport": "streamable_http",
+      "url": "https://your-slack-mcp.example.com/mcp"
+    },
+    "execution_policy": {
+      "timeout_seconds": 60
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {}
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {}
+    },
+    "allowed_skills": [],
+    "enabled": true
+  },
+  {
+    "name": "browser.automate",
+    "display_name": "浏览器自动化",
+    "description": "Playwright 浏览器自动化：导航/点击/填表/截图/抓取/QA 冒烟测试。原技能：ce-test-browser / ce-polish-beta / ce-demo-reel 的浏览器部分。需 Playwright MCP Server。",
+    "bucket": "测试工具",
+    "tool_type": "mcp",
+    "method": "POST",
+    "url": "mcp://playwright",
+    "headers": {},
+    "auth": {},
+    "mcp_config": {
+      "server": "playwright",
+      "transport": "stdio",
+      "command": "npx @playwright/mcp@latest"
+    },
+    "execution_policy": {
+      "timeout_seconds": 60
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {}
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {}
+    },
+    "allowed_skills": [],
+    "enabled": true
+  },
+  {
+    "name": "agent.browser.cli",
+    "display_name": "Agent Browser CLI",
+    "description": "agent-browser 浏览器自动化 CLI 的 MCP 封装：网页交互/表单/截图/数据抓取/Electron 应用自动化。原技能：agent-browser。需 agent-browser MCP Server。",
+    "bucket": "测试工具",
+    "tool_type": "mcp",
+    "method": "POST",
+    "url": "mcp://agent-browser",
+    "headers": {},
+    "auth": {},
+    "mcp_config": {
+      "server": "agent-browser",
+      "transport": "stdio",
+      "command": "agent-browser mcp"
+    },
+    "execution_policy": {
+      "timeout_seconds": 60
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {}
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {}
+    },
+    "allowed_skills": [],
+    "enabled": true
+  },
+  {
+    "name": "ast.search",
+    "display_name": "AST 结构检索",
+    "description": "基于抽象语法树的代码结构搜索与分析（找特定结构/模式/复杂查询），比文本 grep 更精确。原技能：ast-grep。需 ast-grep MCP Server（ast-grep 也提供本地 CLI，沙箱可用的前提下可用通用技能形态）。",
+    "bucket": "开发工具",
+    "tool_type": "mcp",
+    "method": "POST",
+    "url": "mcp://ast-grep",
+    "headers": {},
+    "auth": {},
+    "mcp_config": {
+      "server": "ast-grep",
+      "transport": "stdio",
+      "command": "ast-grep mcp"
+    },
+    "execution_policy": {
+      "timeout_seconds": 60
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {}
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {}
+    },
+    "allowed_skills": [],
+    "enabled": true
+  }
+]

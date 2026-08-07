@@ -1,0 +1,22 @@
+name: feature-condition-test
+description: 验证编排器 condition 跳过路径（{{run_extra}} == false 时 must_skip 应被跳过，always_run 仍执行）
+concurrency: 1
+llm:
+  retry: 1
+  timeout: 120000
+inputs:
+  - name: run_extra
+    default: "true"
+steps:
+  - id: must_skip
+    role: 产品经理
+    task: "执行一个简短任务：请用一句话自我介绍（不超过 20 字），直接回答即可，不要提问。"
+    condition: "{{run_extra}} == true"
+    output: skip_reply
+    max_turns: 1
+  - id: always_run
+    role: 产品经理
+    task: "执行一个简短任务：请说一句话：你好，我是产品经理。直接回答即可，不要提问。"
+    depends_on: [must_skip]
+    output: run_reply
+    max_turns: 1

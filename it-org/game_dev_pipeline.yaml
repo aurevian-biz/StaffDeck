@@ -1,0 +1,107 @@
+# 小游戏开发流水线 —— agency-orchestrator (AO) schema 兼容定义
+# 执行器：it-org/staffdeck_orchestrator.py（把每个 step 派给 StaffDeck 数字员工）
+#
+# 用途：端到端测试编排器能力，用数字员工协作开发一个小游戏（猜数字）。
+# 覆盖特性：
+#   - 模板变量传递（{{game_name}} / 步骤间 output 传递）
+#   - 顺序依赖（design → code → review → approval → delivery）
+#   - 同层并行（code_review 与 acceptance_test 并行，concurrency=2）
+#   - condition 条件跳过（{{run_tests}} == false 时跳过验收）
+#   - approval 人工审批节点（--non-interactive 自动放行）
+#   - 多员工协作（产品经理 / 软件工程师 / 代码审查专家 / 测试验收专员 / 交付项目经理）
+
+name: game-dev-pipeline
+agents_dir: ./it-org
+llm:
+  provider: staffdeck        # 扩展：执行器不是 LLM，是 StaffDeck 数字员工
+  retry: 2
+  timeout: 300000            # 单次 turn 等待上限(ms)
+concurrency: 2               # 同层并行员工数
+inputs:
+  - name: game_name
+    default: 猜数字小游戏  # 游戏名称
+  - name: run_tests
+    default: "true"  # 是否执行验收测试（false 时跳过 acceptance_test 步骤）
+steps:
+  - id: game_design
+    role: 产品经理
+    task: |-
+      请为「{{game_name}}」编写一份简洁的需求规格说明书（markdown 格式）。
+      要求包含：
+      1. 游戏概述：玩法规则（1-2 句）、目标用户、核心乐趣点
+      2. 功能需求：玩家交互流程、输入校验规则、反馈提示（如"大了/小了"）
+      3. 非功能需求：单文件可运行、无第三方依赖、适合新手理解
+      4. 验收标准：3 条可验证的验收标准（用 WHEN...THEN... 表述）
+      请直接输出需求规格，不要提问，控制在 300 字以内。
+    output: game_design_reply
+    max_turns: 2
+  - id: game_code
+    role: 软件工程师
+    task: |-
+      请根据以下需求规格，使用 Python 实现一个完整可运行的「{{game_name}}」。
+      需求规格：
+      {{game_design_reply}}
+
+      实现要求：
+      1. 输出单个 .py 文件的完整代码（含 if __name__ == "__main__" 入口）
+      2. 游戏逻辑：程序随机生成 1-100 的整数，玩家反复猜测，程序提示大了/小了，
+         猜中后显示用了多少次，并询问是否再来一局
+      3. 输入校验：非数字输入要提示重新输入，不允许程序崩溃
+      4. 代码要有必要的中文注释
+      请直接输出完整代码（用 ```python 代码块包裹），不要提问。
+    output: game_code_reply
+    depends_on: [game_design]
+    max_turns: 2
+  - id: code_review
+    role: 代码审查专家
+    task: |-
+      请审查以下 Python 游戏代码，输出审查报告（markdown 格式）。
+      游戏代码：
+      {{game_code_reply}}
+
+      审查要点：
+      1. 正确性：逻辑是否有 bug（随机数范围、大小比较、再来一局的循环）
+      2. 健壮性：输入校验是否完整、是否有崩溃风险
+      3. 可读性：命名、注释、结构是否清晰
+      4. 给出结论：通过 / 需修改，如需修改列出具体问题与修改建议
+      请直接输出审查报告，不要提问，控制在 250 字以内。
+    output: review_reply
+    depends_on: [game_code]
+    max_turns: 2
+  - id: acceptance_test
+    role: 测试验收专员
+    condition: "{{run_tests}} == true"
+    task: |-
+      请为以下 Python 游戏代码编写验收测试方案（markdown 格式）。
+      游戏代码：
+      {{game_code_reply}}
+
+      验收要点：
+      1. 根据需求规格的验收标准设计 3-5 个测试用例（正常路径 / 边界 / 异常输入）
+      2. 每个用例标注：输入、预期输出、是否通过
+      3. 给出验收结论：通过 / 有条件通过 / 不通过
+      请直接输出测试方案，不要提问，控制在 250 字以内。
+    output: test_reply
+    depends_on: [game_code]
+    max_turns: 2
+  - id: release_gate
+    type: approval
+    prompt: 游戏开发与验收已完成，是否放行交付「{{game_name}}」？(y/n)
+    depends_on: [code_review, acceptance_test]
+  - id: delivery
+    role: 交付项目经理
+    task: |-
+      请为「{{game_name}}」编写一份交付总结（markdown 格式）。
+      参考材料：
+      审查结论：{{review_reply}}
+      验收结论：{{test_reply}}
+
+      交付总结要求包含：
+      1. 交付物清单（游戏文件、需求规格、审查报告、测试方案）
+      2. 质量结论（审查 + 验收的最终判定）
+      3. 运行说明（如何启动游戏）
+      4. 后续建议（1-2 条）
+      请直接输出交付总结，不要提问，控制在 250 字以内。
+    output: delivery_reply
+    depends_on: [release_gate]
+    max_turns: 2

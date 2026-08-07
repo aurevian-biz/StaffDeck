@@ -1,0 +1,698 @@
+{
+  "整体智能体": [
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "产品与服务手册",
+      "status": "active"
+    },
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "成功案例库",
+      "status": "active"
+    },
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "技术知识库",
+      "status": "active"
+    },
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "交付流程制度库",
+      "status": "active"
+    },
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "测试规范与验收标准",
+      "status": "active"
+    },
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "售后故障处理手册",
+      "status": "active"
+    },
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "公司制度库",
+      "status": "active"
+    },
+    {
+      "resource_type": "tool",
+      "resource_id": "crm.lead.register",
+      "status": "active"
+    },
+    {
+      "resource_type": "tool",
+      "resource_id": "project.progress.query",
+      "status": "active"
+    },
+    {
+      "resource_type": "tool",
+      "resource_id": "report.weekly.push",
+      "status": "active"
+    },
+    {
+      "resource_type": "tool",
+      "resource_id": "ticket.handle",
+      "status": "active"
+    },
+    {
+      "resource_type": "tool",
+      "resource_id": "log.query",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "document-summarizer",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "contract-clause-extractor",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "defect-report-formatter",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "code-review-helper",
+      "status": "active"
+    }
+  ],
+  "售前咨询顾问": [
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "产品与服务手册",
+      "status": "active"
+    },
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "成功案例库",
+      "status": "active"
+    },
+    {
+      "resource_type": "skill",
+      "resource_id": "customer_intake_sop",
+      "status": "active"
+    },
+    {
+      "resource_type": "skill",
+      "resource_id": "quote_review_sop",
+      "status": "active"
+    },
+    {
+      "resource_type": "tool",
+      "resource_id": "crm.lead.register",
+      "status": "active"
+    },
+    {
+      "resource_type": "tool",
+      "resource_id": "search.web.last30",
+      "status": "active"
+    }
+  ],
+  "方案架构师": [
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "技术知识库",
+      "status": "active"
+    },
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "成功案例库",
+      "status": "active"
+    },
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "交付流程制度库",
+      "status": "active"
+    },
+    {
+      "resource_type": "skill",
+      "resource_id": "solution_design_sop",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "document-summarizer",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "ce-plan",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "ce-doc-review",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "ce-agent-native-architecture",
+      "status": "active"
+    },
+    {
+      "resource_type": "tool",
+      "resource_id": "proof.doc.review",
+      "status": "active"
+    },
+    {
+      "resource_type": "skill",
+      "resource_id": "openspec_design_sop",
+      "status": "active"
+    }
+  ],
+  "交付项目经理": [
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "交付流程制度库",
+      "status": "active"
+    },
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "产品与服务手册",
+      "status": "active"
+    },
+    {
+      "resource_type": "skill",
+      "resource_id": "project_risk_inspection_sop",
+      "status": "active"
+    },
+    {
+      "resource_type": "skill",
+      "resource_id": "weekly_report_sop",
+      "status": "active"
+    },
+    {
+      "resource_type": "tool",
+      "resource_id": "project.progress.query",
+      "status": "active"
+    },
+    {
+      "resource_type": "tool",
+      "resource_id": "report.weekly.push",
+      "status": "active"
+    }
+  ],
+  "软件工程师": [
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "技术知识库",
+      "status": "active"
+    },
+    {
+      "resource_type": "skill",
+      "resource_id": "tech_support_sop",
+      "status": "active"
+    },
+    {
+      "resource_type": "skill",
+      "resource_id": "code_implementation_sop",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "code-review-helper",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "document-summarizer",
+      "status": "active"
+    },
+    {
+      "resource_type": "tool",
+      "resource_id": "code.review",
+      "status": "active"
+    },
+    {
+      "resource_type": "tool",
+      "resource_id": "api.example",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "ce-debug",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "ce-simplify-code",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "ce-dhh-rails-style",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "ce-commit",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "ce-commit-push-pr",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "ce-worktree",
+      "status": "active"
+    },
+    {
+      "resource_type": "tool",
+      "resource_id": "ast.search",
+      "status": "active"
+    }
+  ],
+  "测试验收专员": [
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "测试规范与验收标准",
+      "status": "active"
+    },
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "交付流程制度库",
+      "status": "active"
+    },
+    {
+      "resource_type": "skill",
+      "resource_id": "test_case_generation_sop",
+      "status": "active"
+    },
+    {
+      "resource_type": "skill",
+      "resource_id": "acceptance_check_sop",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "defect-report-formatter",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "reviewing-openspec-artifacts",
+      "status": "active"
+    },
+    {
+      "resource_type": "tool",
+      "resource_id": "browser.automate",
+      "status": "active"
+    },
+    {
+      "resource_type": "tool",
+      "resource_id": "agent.browser.cli",
+      "status": "active"
+    }
+  ],
+  "售后支持工程师": [
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "售后故障处理手册",
+      "status": "active"
+    },
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "产品与服务手册",
+      "status": "active"
+    },
+    {
+      "resource_type": "skill",
+      "resource_id": "ticket_triage_sop",
+      "status": "active"
+    },
+    {
+      "resource_type": "skill",
+      "resource_id": "fault_diagnosis_sop",
+      "status": "active"
+    },
+    {
+      "resource_type": "tool",
+      "resource_id": "ticket.handle",
+      "status": "active"
+    },
+    {
+      "resource_type": "tool",
+      "resource_id": "log.query",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "ce-debug",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "ce-riffrec-feedback-analysis",
+      "status": "active"
+    }
+  ],
+  "知识运营专员": [
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "知识运营台账",
+      "status": "active"
+    },
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "技术知识库",
+      "status": "active"
+    },
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "售后故障处理手册",
+      "status": "active"
+    },
+    {
+      "resource_type": "skill",
+      "resource_id": "knowledge_sedimentation_sop",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "ce-compound",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "ce-compound-refresh",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "ce-riffrec-feedback-analysis",
+      "status": "active"
+    },
+    {
+      "resource_type": "tool",
+      "resource_id": "slack.search",
+      "status": "active"
+    }
+  ],
+  "内部行政助手": [
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "公司制度库",
+      "status": "active"
+    },
+    {
+      "resource_type": "skill",
+      "resource_id": "admin_service_sop",
+      "status": "active"
+    }
+  ],
+  "代码审查专家": [
+    {
+      "resource_type": "skill",
+      "resource_id": "code_review_expert_sop",
+      "status": "active",
+      "metadata": {}
+    },
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "技术知识库",
+      "status": "active",
+      "metadata": {}
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "ce-code-review",
+      "status": "active"
+    }
+  ],
+  "后端架构师": [
+    {
+      "resource_type": "skill",
+      "resource_id": "backend_architect_sop",
+      "status": "active",
+      "metadata": {}
+    },
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "技术知识库",
+      "status": "active",
+      "metadata": {}
+    }
+  ],
+  "API 测试工程师": [
+    {
+      "resource_type": "skill",
+      "resource_id": "api_testing_sop",
+      "status": "active",
+      "metadata": {}
+    },
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "技术知识库",
+      "status": "active",
+      "metadata": {}
+    },
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "测试规范与验收标准",
+      "status": "active",
+      "metadata": {}
+    }
+  ],
+  "性能基准工程师": [
+    {
+      "resource_type": "skill",
+      "resource_id": "performance_benchmark_sop",
+      "status": "active",
+      "metadata": {}
+    },
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "技术知识库",
+      "status": "active",
+      "metadata": {}
+    },
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "测试规范与验收标准",
+      "status": "active",
+      "metadata": {}
+    }
+  ],
+  "DevOps 自动化工程师": [
+    {
+      "resource_type": "skill",
+      "resource_id": "devops_automation_sop",
+      "status": "active",
+      "metadata": {}
+    },
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "技术知识库",
+      "status": "active",
+      "metadata": {}
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "ce-clean-gone-branches",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "ce-worktree",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "ce-setup",
+      "status": "active"
+    }
+  ],
+  "AI 应用工程师": [
+    {
+      "resource_type": "skill",
+      "resource_id": "ai_app_engineer_sop",
+      "status": "active",
+      "metadata": {}
+    },
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "技术知识库",
+      "status": "active",
+      "metadata": {}
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "ce-agent-native-architecture",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "ce-optimize",
+      "status": "active"
+    },
+    {
+      "resource_type": "tool",
+      "resource_id": "image.generate.gemini",
+      "status": "active"
+    }
+  ],
+  "安全架构师": [
+    {
+      "resource_type": "skill",
+      "resource_id": "security_architect_sop",
+      "status": "active",
+      "metadata": {}
+    },
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "技术知识库",
+      "status": "active",
+      "metadata": {}
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "ce-agent-native-audit",
+      "status": "active"
+    }
+  ],
+  "渗透测试工程师": [
+    {
+      "resource_type": "skill",
+      "resource_id": "penetration_test_sop",
+      "status": "active",
+      "metadata": {}
+    },
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "技术知识库",
+      "status": "active",
+      "metadata": {}
+    },
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "测试规范与验收标准",
+      "status": "active",
+      "metadata": {}
+    }
+  ],
+  "前端开发工程师": [
+    {
+      "resource_type": "skill",
+      "resource_id": "frontend_dev_sop",
+      "status": "active",
+      "metadata": {}
+    },
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "技术知识库",
+      "status": "active",
+      "metadata": {}
+    },
+    {
+      "resource_type": "tool",
+      "resource_id": "image.generate.gemini",
+      "status": "active"
+    },
+    {
+      "resource_type": "tool",
+      "resource_id": "browser.automate",
+      "status": "active"
+    }
+  ],
+  "数据库优化工程师": [
+    {
+      "resource_type": "skill",
+      "resource_id": "database_optimize_sop",
+      "status": "active",
+      "metadata": {}
+    },
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "技术知识库",
+      "status": "active",
+      "metadata": {}
+    }
+  ],
+  "产品经理": [
+    {
+      "resource_type": "skill",
+      "resource_id": "product_manage_sop",
+      "status": "active",
+      "metadata": {}
+    },
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "技术知识库",
+      "status": "active",
+      "metadata": {}
+    },
+    {
+      "resource_type": "knowledge_base",
+      "resource_id": "成功案例库",
+      "status": "active",
+      "metadata": {}
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "ce-brainstorm",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "ce-plan",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "ce-ideate",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "ce-doc-review",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "ce-strategy",
+      "status": "active"
+    },
+    {
+      "resource_type": "general_skill",
+      "resource_id": "ce-release-notes",
+      "status": "active"
+    },
+    {
+      "resource_type": "tool",
+      "resource_id": "proof.doc.review",
+      "status": "active"
+    },
+    {
+      "resource_type": "tool",
+      "resource_id": "product.pulse",
+      "status": "active"
+    },
+    {
+      "resource_type": "tool",
+      "resource_id": "search.web.last30",
+      "status": "active"
+    },
+    {
+      "resource_type": "tool",
+      "resource_id": "trend.analyze",
+      "status": "active"
+    },
+    {
+      "resource_type": "tool",
+      "resource_id": "slack.search",
+      "status": "active"
+    },
+    {
+      "resource_type": "skill",
+      "resource_id": "openspec_propose_sop",
+      "status": "active"
+    }
+  ]
+}
