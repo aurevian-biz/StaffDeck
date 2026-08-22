@@ -6,6 +6,7 @@ so a digital employee can enumerate its own past deliveries instead of claiming
 it cannot find documents it delivered hours ago.
 """
 
+import base64
 import hashlib
 from datetime import timedelta
 
@@ -14,10 +15,12 @@ from sqlmodel import Session, SQLModel, create_engine
 
 from app.core.capability_manifest import CapabilityManifestBuilder
 from app.core.harness_capability_invoker import HarnessCapabilityInvoker
+from app.core.harness_session_cleanup import harness_task_workspace_path
 from app.db.models import (
     ChatSession,
     Message,
     ModelConfig,
+    UIConfig,
     new_id,
     utc_now,
 )
@@ -322,3 +325,269 @@ def test_list_published_deliverables_orders_newest_first(
     assert result["success"] is True
     paths = [item["path"] for item in result["data"]["deliverables"]]
     assert paths == ["new.md", "old.md"]
+
+
+def _seed_ui_config(db: Session, tmp_path) -> None:
+    db.add(
+        UIConfig(
+            tenant_id="tenant-demo",
+            harness_storage_path=str(tmp_path / "storage"),
+            sandbox_enabled=False,
+        )
+    )
+    db.commit()
+
+
+def _write_harness_file(
+    db: Session,
+    *,
+    task_frame_id: str,
+    path: str,
+    content: bytes,
+) -> None:
+    """Write a file into the exact Harness workspace layout for a task frame."""
+    workspace = harness_task_workspace_path(
+        tenant_id="tenant-demo",
+        session_id="session-1",
+        task_frame_id=task_frame_id,
+        db=db,
+    )
+    target = workspace / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(content)
+
+
+def test_read_published_deliverable_returns_file_content(tmp_path, monkeypatch) -> None:
+    """happy path:按 path 读回历史 frame 的真实文件内容(base64 解码后一致)。"""
+    monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
+    engine = _test_engine()
+    with Session(engine) as db:
+        _seed_ui_config(db, tmp_path)
+        content = "# 开发排期文档\n\n四周排期计划。\n".encode("utf-8")
+        _write_harness_file(
+            db,
+            task_frame_id="task-old-1",
+            path="docs/dev-schedule.md",
+            content=content,
+        )
+        db.add(
+            Message(
+                id=new_id("msg"),
+                tenant_id="tenant-demo",
+                session_id="session-1",
+                role="assistant",
+                content="发布了排期文档",
+                metadata_json={
+                    "harness_artifacts": [
+                        _artifact("task-old-1", "docs/dev-schedule.md")
+                    ],
+                    "task_frame_ids": ["task-old-1"],
+                },
+            )
+        )
+        db.commit()
+        invoker = _build_invoker(db)
+        result = invoker.invoke(
+            "read_published_deliverable",
+            {"path": "docs/dev-schedule.md"},
+        )
+
+    assert result["success"] is True
+    data = result["data"]
+    assert data["path"] == "docs/dev-schedule.md"
+    assert data["task_frame_id"] == "task-old-1"
+    assert data["size"] == len(content)
+    assert data["content_type"] == "text/markdown"
+    assert base64.b64decode(data["content_base64"]) == content
+
+
+def test_read_published_deliverable_disambiguates_same_path_across_frames(
+    tmp_path, monkeypatch
+) -> None:
+    """同名 path 跨 frame:不传 task_frame_id 取最新,传则精确命中指定 frame。"""
+    monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
+    engine = _test_engine()
+    with Session(engine) as db:
+        _seed_ui_config(db, tmp_path)
+        _write_harness_file(
+            db,
+            task_frame_id="task-old-1",
+            path="docs/report.md",
+            content=b"old version",
+        )
+        _write_harness_file(
+            db,
+            task_frame_id="task-old-2",
+            path="docs/report.md",
+            content=b"new version",
+        )
+        db.add(
+            Message(
+                id="msg-old",
+                tenant_id="tenant-demo",
+                session_id="session-1",
+                role="assistant",
+                content="旧 frame 产物",
+                created_at=utc_now(),
+                metadata_json={
+                    "harness_artifacts": [
+                        _artifact("task-old-1", "docs/report.md")
+                    ]
+                },
+            )
+        )
+        db.add(
+            Message(
+                id="msg-new",
+                tenant_id="tenant-demo",
+                session_id="session-1",
+                role="assistant",
+                content="新 frame 产物",
+                created_at=utc_now() + timedelta(seconds=5),
+                metadata_json={
+                    "harness_artifacts": [
+                        _artifact("task-old-2", "docs/report.md")
+                    ]
+                },
+            )
+        )
+        db.commit()
+        invoker = _build_invoker(db)
+        latest = invoker.invoke(
+            "read_published_deliverable",
+            {"path": "docs/report.md"},
+        )
+        pinned = invoker.invoke(
+            "read_published_deliverable",
+            {"path": "docs/report.md", "task_frame_id": "task-old-1"},
+        )
+
+    assert latest["success"] is True
+    assert latest["data"]["task_frame_id"] == "task-old-2"
+    assert base64.b64decode(latest["data"]["content_base64"]) == b"new version"
+    assert pinned["success"] is True
+    assert pinned["data"]["task_frame_id"] == "task-old-1"
+    assert base64.b64decode(pinned["data"]["content_base64"]) == b"old version"
+
+
+def test_read_published_deliverable_not_found_returns_failure(tmp_path, monkeypatch) -> None:
+    """path 不在历史 harness_artifacts:ARTIFACT_NOT_FOUND。"""
+    monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
+    engine = _test_engine()
+    with Session(engine) as db:
+        _seed_ui_config(db, tmp_path)
+        db.add(
+            Message(
+                id=new_id("msg"),
+                tenant_id="tenant-demo",
+                session_id="session-1",
+                role="assistant",
+                content="发布了排期文档",
+                metadata_json={
+                    "harness_artifacts": [
+                        _artifact("task-old-1", "docs/dev-schedule.md")
+                    ]
+                },
+            )
+        )
+        db.commit()
+        invoker = _build_invoker(db)
+        result = invoker.invoke(
+            "read_published_deliverable",
+            {"path": "docs/missing.md"},
+        )
+
+    assert result["success"] is False
+    assert result["error"]["code"] == "ARTIFACT_NOT_FOUND"
+
+
+def test_read_published_deliverable_unreadable_file_returns_failure(
+    tmp_path, monkeypatch
+) -> None:
+    """条目存在但文件缺失(被清理):ARTIFACT_UNREADABLE。"""
+    monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
+    engine = _test_engine()
+    with Session(engine) as db:
+        _seed_ui_config(db, tmp_path)
+        db.add(
+            Message(
+                id=new_id("msg"),
+                tenant_id="tenant-demo",
+                session_id="session-1",
+                role="assistant",
+                content="发布了排期文档",
+                metadata_json={
+                    "harness_artifacts": [
+                        _artifact("task-old-1", "docs/dev-schedule.md")
+                    ]
+                },
+            )
+        )
+        db.commit()
+        invoker = _build_invoker(db)
+        result = invoker.invoke(
+            "read_published_deliverable",
+            {"path": "docs/dev-schedule.md"},
+        )
+
+    assert result["success"] is False
+    assert result["error"]["code"] == "ARTIFACT_UNREADABLE"
+
+
+def test_read_published_deliverable_rejects_bad_arguments(tmp_path, monkeypatch) -> None:
+    """path 为空/非字符串:INVALID_ARGUMENTS。"""
+    monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
+    engine = _test_engine()
+    with Session(engine) as db:
+        _seed_ui_config(db, tmp_path)
+        db.commit()
+        invoker = _build_invoker(db)
+        missing = invoker.invoke("read_published_deliverable", {})
+        blank = invoker.invoke("read_published_deliverable", {"path": "  "})
+
+    assert missing["success"] is False
+    assert missing["error"]["code"] == "INVALID_ARGUMENTS"
+    assert blank["success"] is False
+    assert blank["error"]["code"] == "INVALID_ARGUMENTS"
+
+
+def test_read_published_deliverable_truncates_oversized_content(
+    tmp_path, monkeypatch
+) -> None:
+    """超过 max_bytes 时截断并标记 truncated。"""
+    monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
+    engine = _test_engine()
+    with Session(engine) as db:
+        _seed_ui_config(db, tmp_path)
+        content = b"x" * 2048
+        _write_harness_file(
+            db,
+            task_frame_id="task-old-1",
+            path="docs/big.md",
+            content=content,
+        )
+        db.add(
+            Message(
+                id=new_id("msg"),
+                tenant_id="tenant-demo",
+                session_id="session-1",
+                role="assistant",
+                content="发布了超长文档",
+                metadata_json={
+                    "harness_artifacts": [
+                        _artifact("task-old-1", "docs/big.md")
+                    ]
+                },
+            )
+        )
+        db.commit()
+        invoker = _build_invoker(db)
+        result = invoker.invoke(
+            "read_published_deliverable",
+            {"path": "docs/big.md", "max_bytes": 1024},
+        )
+
+    assert result["success"] is True
+    data = result["data"]
+    assert data["truncated"] is True
+    assert len(base64.b64decode(data["content_base64"])) == 1024

@@ -433,6 +433,34 @@ def _internal_capability_descriptors() -> list[CapabilityDescriptor]:
             },
             metadata={"provider": "harness", "side_effect": "read"},
         ),
+        CapabilityDescriptor(
+            capability_id="builtin.discovery.read_published_deliverable",
+            name="read_published_deliverable",
+            kind="internal",
+            description=(
+                "Read back the real content of a deliverable this chat session has "
+                "already published (matched by `path` across all task frames, "
+                "optionally disambiguated by `task_frame_id`). Content is returned "
+                "base64-encoded and truncated to `max_bytes` when oversized. Use "
+                "this to reuse or resume an existing document instead of recreating it."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "minLength": 1},
+                    "task_frame_id": {"type": "string"},
+                    "max_bytes": {
+                        "type": "integer",
+                        "minimum": 1024,
+                        "maximum": 8388608,
+                        "default": 1048576,
+                    },
+                },
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+            metadata={"provider": "harness", "side_effect": "read"},
+        ),
     ]
 
 
