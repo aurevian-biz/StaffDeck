@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import mimetypes
@@ -110,6 +111,70 @@ def _channel_payload_from_harness_artifacts(
             }
         )
     return {"files": files} if files else None
+
+
+def _register_channel_payload_attachments(
+    message: Message,
+    payload: dict[str, Any],
+) -> None:
+    """把显式 channel_payload.files 附件镜像登记进 harness_artifacts(幂等)。
+
+    生成方直接写 channel_payload.files(不经过 harness 工作区)时,这些附件不会
+    出现在 harness_artifacts,员工后续检索"已发布交付物"时不可见——渠道与
+    artifact 账目脱节。投递登记时把 files 补登记为 workspace_file 条目,后续
+    轮次即可枚举。同名 path 已存在时跳过,重复登记不产生脏数据。
+    """
+    raw_files = payload.get("files")
+    if not isinstance(raw_files, list) or not raw_files:
+        return
+    metadata = message.metadata_json or {}
+    existing = metadata.get("harness_artifacts")
+    artifacts = list(existing) if isinstance(existing, list) else []
+    existing_paths = {
+        str(entry.get("path") or "")
+        for entry in artifacts
+        if isinstance(entry, dict)
+    }
+    frame_ids = metadata.get("task_frame_ids")
+    task_frame_id = ""
+    if isinstance(frame_ids, list) and frame_ids:
+        task_frame_id = str(frame_ids[0])
+    for file_entry in raw_files:
+        if not isinstance(file_entry, dict):
+            continue
+        filename = str(file_entry.get("filename") or "").strip()
+        if not filename or filename in existing_paths:
+            continue
+        raw_data = str(file_entry.get("data") or "")
+        try:
+            content = base64.b64decode(raw_data)
+        except (ValueError, TypeError):
+            logger.warning(
+                "channel_payload 附件登记跳过:base64 解码失败 filename=%s",
+                filename,
+            )
+            continue
+        content_type = str(file_entry.get("content_type") or "").strip()
+        if not content_type:
+            content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        artifacts.append(
+            {
+                "type": "workspace_file",
+                "task_frame_id": task_frame_id,
+                "path": filename,
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "size": len(content),
+                "display_name": filename,
+                "content_type": content_type,
+                "operation": "channel_delivery",
+                "source": "channel_delivery",
+            }
+        )
+        existing_paths.add(filename)
+    # SQLAlchemy 对 JSON 列按内容比较判定变更;必须整体重建新 dict,
+    # 否则原地修改同一引用不触发 flush。
+    if artifacts != existing:
+        message.metadata_json = {**metadata, "harness_artifacts": artifacts}
 
 
 def _stage_failed_delivery(
@@ -360,6 +425,14 @@ def stage_channel_delivery(db: Session, chat_session: ChatSession, message: Mess
             if isinstance(payload, dict) and payload
             else None
         )
+        # 显式 channel_payload(生成方直接写 files)附件镜像进 harness_artifacts,
+        # 让后续轮次可枚举到这些已发布交付物;桥接路径产物天然已登记,不重复。
+        if (
+            isinstance(payload, dict)
+            and (message.metadata_json or {}).get("channel_payload")
+        ):
+            _register_channel_payload_attachments(message, payload)
+            db.add(message)
         db.add(
             ChannelDelivery(
                 tenant_id=chat_session.tenant_id,

@@ -36,6 +36,7 @@ from app.db.models import (
     ChatSession,
     GeneralSkill,
     HarnessInvocationRecord,
+    Message,
     ModelConfig,
     Skill,
     Tool,
@@ -477,6 +478,8 @@ class HarnessCapabilityInvoker:
             return self._search_capabilities(arguments)
         if name == "capability_describe":
             return self._describe_capabilities(arguments)
+        if name == "list_published_deliverables":
+            return self._list_published_deliverables(arguments)
         return _failure(
             "UNSUPPORTED_INTERNAL_CAPABILITY",
             "不支持的 Harness 内部能力。",
@@ -588,6 +591,59 @@ class HarnessCapabilityInvoker:
                 "revoked": revoked,
                 "notice": "以上能力已在当前 TaskFrame AgentLoop 中激活。",
             },
+        }
+
+    def _list_published_deliverables(
+        self,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        raw_limit = arguments.get("limit", 50)
+        if isinstance(raw_limit, bool) or not isinstance(raw_limit, int):
+            return _failure(
+                "INVALID_ARGUMENTS",
+                "list_published_deliverables limit 必须是整数。",
+            )
+        limit = max(1, min(raw_limit, 100))
+        rows = self.db.exec(
+            select(Message)
+            .where(
+                Message.tenant_id == self.tenant_id,
+                Message.session_id == self.session.id,
+                Message.role == "assistant",
+            )
+            .order_by(Message.created_at.desc(), Message.id.desc())
+        ).all()
+        deliverables: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for row in rows:
+            if len(deliverables) >= limit:
+                break
+            artifacts = (row.metadata_json or {}).get("harness_artifacts") or []
+            if not isinstance(artifacts, list):
+                continue
+            for artifact in artifacts:
+                if (
+                    not isinstance(artifact, dict)
+                    or artifact.get("type") != "workspace_file"
+                ):
+                    continue
+                key = (
+                    str(artifact.get("task_frame_id") or ""),
+                    str(artifact.get("path") or ""),
+                )
+                if not key[1] or key in seen:
+                    continue
+                if len(deliverables) >= limit:
+                    break
+                seen.add(key)
+                deliverables.append(dict(artifact))
+        self._emit_trace(
+            "list_published_deliverables_completed",
+            {"count": len(deliverables)},
+        )
+        return {
+            "success": True,
+            "data": {"deliverables": deliverables, "count": len(deliverables)},
         }
 
     def _invoke_general_skill(

@@ -10,6 +10,7 @@
 """
 
 import base64
+import hashlib
 import json
 from typing import Any
 
@@ -308,3 +309,155 @@ def test_explicit_channel_payload_takes_priority_over_harness_bridge(tmp_path) -
         assert delivery.payload_json == json.dumps(explicit, ensure_ascii=False)
         assert delivery.payload_json is not None
         assert "files" not in json.loads(delivery.payload_json)
+
+
+def test_explicit_channel_payload_files_are_registered_as_artifacts(tmp_path) -> None:
+    """显式 channel_payload.files 附件补登记进 harness_artifacts(投递必有登记不变量)。
+
+    契约:生成方直接写 channel_payload.files(不经过 harness 工作区)时,投递登记
+    应把这些附件镜像进 harness_artifacts,使员工后续可经已发布交付物清单检索。
+    """
+    engine = _test_engine()
+    with Session(engine) as db:
+        _seed_base(db, tmp_path)
+        binding = _seed_binding(db, channel="discord")
+        chat_session = _discord_session(binding)
+        original = "显式通道附件内容".encode("utf-8")
+        explicit = {
+            "files": [
+                {
+                    "filename": "explicit.md",
+                    "data": base64.b64encode(original).decode("ascii"),
+                    "content_type": "text/markdown",
+                }
+            ]
+        }
+        message = _assistant_message(
+            chat_session,
+            message_id="msg_explicit",
+            metadata_json={
+                "channel_payload": explicit,
+                "task_frame_ids": ["task_frame_1"],
+            },
+        )
+        db.add(chat_session)
+        db.add(message)
+        db.commit()
+
+        stage_channel_delivery(db, chat_session, message)
+        db.commit()
+
+        delivery = db.exec(select(ChannelDelivery)).one()
+        assert delivery.payload_json == json.dumps(explicit, ensure_ascii=False)
+
+        refreshed = db.get(Message, message.id)
+        artifacts = (refreshed.metadata_json or {}).get("harness_artifacts")
+        assert isinstance(artifacts, list) and len(artifacts) == 1
+        entry = artifacts[0]
+        assert entry["type"] == "workspace_file"
+        assert entry["path"] == "explicit.md"
+        assert entry["task_frame_id"] == "task_frame_1"
+        assert entry["display_name"] == "explicit.md"
+        assert entry["content_type"] == "text/markdown"
+        assert entry["size"] == len(original)
+        assert entry["sha256"] == hashlib.sha256(original).hexdigest()
+        assert entry["operation"] == "channel_delivery"
+        assert entry["source"] == "channel_delivery"
+
+
+def test_explicit_channel_payload_registration_is_idempotent(tmp_path) -> None:
+    """显式 channel_payload 附件登记幂等:同名 path 已在 harness_artifacts 时不重复追加。"""
+    engine = _test_engine()
+    with Session(engine) as db:
+        _seed_base(db, tmp_path)
+        binding = _seed_binding(db, channel="discord")
+        chat_session = _discord_session(binding)
+        original = b"same file content"
+        explicit = {
+            "files": [
+                {
+                    "filename": "report.md",
+                    "data": base64.b64encode(original).decode("ascii"),
+                    "content_type": "text/markdown",
+                }
+            ]
+        }
+        message = _assistant_message(
+            chat_session,
+            message_id="msg_explicit_idem",
+            metadata_json={
+                "channel_payload": explicit,
+                "task_frame_ids": ["task_frame_1"],
+                "harness_artifacts": [
+                    {
+                        "type": "workspace_file",
+                        "task_frame_id": "task_frame_1",
+                        "path": "report.md",
+                        "sha256": "x" * 64,
+                        "size": len(original),
+                    }
+                ],
+            },
+        )
+        db.add(chat_session)
+        db.add(message)
+        db.commit()
+
+        stage_channel_delivery(db, chat_session, message)
+        db.commit()
+
+        refreshed = db.get(Message, message.id)
+        artifacts = (refreshed.metadata_json or {}).get("harness_artifacts")
+        assert isinstance(artifacts, list) and len(artifacts) == 1
+        assert artifacts[0]["path"] == "report.md"
+
+
+def test_explicit_channel_payload_without_files_keeps_artifacts_untouched(tmp_path) -> None:
+    """embeds-only 的显式 channel_payload 不污染 harness_artifacts。"""
+    engine = _test_engine()
+    with Session(engine) as db:
+        _seed_base(db, tmp_path)
+        binding = _seed_binding(db, channel="discord")
+        chat_session = _discord_session(binding)
+        explicit = {"embeds": [{"title": "仅卡片,无附件"}]}
+        message = _assistant_message(
+            chat_session,
+            message_id="msg_embeds",
+            metadata_json={"channel_payload": explicit},
+        )
+        db.add(chat_session)
+        db.add(message)
+        db.commit()
+
+        stage_channel_delivery(db, chat_session, message)
+        db.commit()
+
+        refreshed = db.get(Message, message.id)
+        assert (refreshed.metadata_json or {}).get("harness_artifacts") in (None, [])
+
+
+def test_bridge_payload_does_not_duplicate_artifacts(tmp_path) -> None:
+    """桥接路径产物天然已登记,投递登记不得重复追加同名条目。"""
+    engine = _test_engine()
+    with Session(engine) as db:
+        _seed_base(db, tmp_path)
+        binding = _seed_binding(db, channel="discord")
+        chat_session = _discord_session(binding)
+        original = b"bridged report"
+        _write_harness_file(db, chat_session, "task_frame_1", "report.md", original)
+        message = _assistant_message(
+            chat_session,
+            message_id="msg_bridge",
+            metadata_json={"harness_artifacts": [_artifact("task_frame_1", "report.md", len(original))]},
+        )
+        db.add(chat_session)
+        db.add(message)
+        db.commit()
+
+        stage_channel_delivery(db, chat_session, message)
+        db.commit()
+
+        refreshed = db.get(Message, message.id)
+        artifacts = (refreshed.metadata_json or {}).get("harness_artifacts")
+        assert isinstance(artifacts, list) and len(artifacts) == 1
+        assert artifacts[0]["path"] == "report.md"

@@ -407,6 +407,32 @@ def _internal_capability_descriptors() -> list[CapabilityDescriptor]:
             },
             metadata={"provider": "harness", "side_effect": "read"},
         ),
+        CapabilityDescriptor(
+            capability_id="builtin.discovery.published_deliverables",
+            name="list_published_deliverables",
+            kind="internal",
+            description=(
+                "List the deliverables this chat session has already published, "
+                "aggregated from harness artifacts across all task frames and any "
+                "channel-delivered attachments. Returns the most recently published "
+                "deliverables first (newest by creation time), up to `limit` items. "
+                "Use this when checking whether a document has already been produced "
+                "or delivered before recreating it."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "default": 50,
+                    }
+                },
+                "additionalProperties": False,
+            },
+            metadata={"provider": "harness", "side_effect": "read"},
+        ),
     ]
 
 
