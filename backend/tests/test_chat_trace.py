@@ -7,6 +7,7 @@ from app.api.chat import (
     _build_turn_traces,
     _events_after_cursor,
     _format_scheduled_task_schedule,
+    _harness_event_trace_line,
     _message_turn_ids_from_events,
     _persist_chat_turn_cancelled,
     _persist_chat_turn_interrupted,
@@ -14,8 +15,45 @@ from app.api.chat import (
     list_chat_session_spans,
     message_read,
 )
-from app.db.models import AgentEvent, ChatSession, KnowledgeConcept, Message, Tenant, User
+import app.core.cancellation as cancellation_module
+from app.core.cancellation import is_chat_turn_cancelled
+from app.db.models import (
+    AgentEvent,
+    ChatSession,
+    HarnessTurnRecord,
+    KnowledgeConcept,
+    Message,
+    Tenant,
+    User,
+)
 from app.observability.event_log import EventLog
+
+
+def test_task_frame_finished_keeps_switched_sop_name_while_awaiting_user() -> None:
+    line = _harness_event_trace_line(
+        AgentEvent(
+            tenant_id="tenant_demo",
+            session_id="session_test",
+            event_type="task_frame_finished",
+            payload_json={
+                "task_frame_id": "task_purchase",
+                "kind": "sop",
+                "skill_id": "skill_purchase_001",
+                "skill_name": "购买商品流程",
+                "step_id": "collect_user_name",
+                "status": "awaiting_user",
+                "action_count": 1,
+            },
+        )
+    )
+
+    assert line == {
+        "id": "harness_frame_task_purchase",
+        "kind": "skill",
+        "text": "等待用户补充 购买商品流程",
+        "detail": "状态 awaiting_user · 步骤 collect_user_name · 执行 1 个动作",
+        "state": "running",
+    }
 
 
 def test_event_log_binds_all_execution_events_to_current_turn() -> None:
@@ -1000,6 +1038,73 @@ def test_cancel_endpoint_persists_cancel_even_before_user_event_is_visible() -> 
         .order_by(Message.created_at)
     ).all()
     assert [message.role for message in messages] == []
+    assert is_chat_turn_cancelled(
+        session_row.id,
+        "turn_local_pending",
+        db=db,
+    )
+
+
+def test_reused_message_id_does_not_cancel_a_new_client_turn() -> None:
+    db = _test_db()
+    session_row = ChatSession(id="session_reused_id", tenant_id="tenant_demo", user_id="user_demo")
+    db.add(session_row)
+    now = datetime(2026, 8, 17, 9, 0, 0)
+    db.add(
+        AgentEvent(
+            tenant_id="tenant_demo",
+            session_id=session_row.id,
+            event_type="stream_cancelled",
+            payload_json={
+                "turn_id": "message_reused",
+                "user_message_id": "message_reused",
+                "client_turn_id": "old_client_turn",
+            },
+            created_at=now,
+        )
+    )
+    db.add(
+        HarnessTurnRecord(
+            tenant_id="tenant_demo",
+            session_id=session_row.id,
+            client_turn_id="message_reused",
+            request_digest="sha256:new-request",
+            status="started",
+            lease_owner="worker-new",
+            lease_expires_at=now + timedelta(minutes=5),
+            user_message_id="new_user_message",
+        )
+    )
+    db.commit()
+
+    assert not is_chat_turn_cancelled(
+        session_row.id,
+        "message_reused",
+        db=db,
+        identity_kind="client",
+    )
+    assert is_chat_turn_cancelled(
+        session_row.id,
+        "message_reused",
+        db=db,
+        identity_kind="message",
+    )
+
+
+def test_process_local_cancel_markers_are_bounded(monkeypatch) -> None:
+    monkeypatch.setattr(cancellation_module, "_MAX_CANCEL_MARKERS", 2)
+    session_id = "session_marker_bound"
+    try:
+        cancellation_module.cancel_chat_turn(session_id, "turn_1")
+        cancellation_module.cancel_chat_turn(session_id, "turn_2")
+        cancellation_module.cancel_chat_turn(session_id, "turn_3")
+
+        assert not cancellation_module.is_chat_turn_cancelled(session_id, "turn_1")
+        assert cancellation_module.is_chat_turn_cancelled(session_id, "turn_2")
+        assert cancellation_module.is_chat_turn_cancelled(session_id, "turn_3")
+    finally:
+        for turn_id in ("turn_1", "turn_2", "turn_3"):
+            cancellation_module.clear_chat_turn_cancelled(session_id, turn_id)
 
 
 def test_stream_interrupted_persists_terminal_trace_and_message() -> None:

@@ -13,6 +13,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 
 from app.agents.branching import ensure_open_gallery_binding
 from app.core import harness_agent as harness_agent_module
+from app.core import harness_v2_engine as harness_v2_engine_module
 from app.core import turn_planner as turn_planner_module
 from app.core.agent_loop import AgentLoop
 from app.core.capability_manifest import (
@@ -21,7 +22,7 @@ from app.core.capability_manifest import (
     general_skill_snapshot_digest,
     tool_snapshot_digest,
 )
-from app.core.harness_agent import HarnessTaskAgent
+from app.core.harness_agent import HarnessTaskAgent, _transcript_for_model
 from app.core.harness_attachments import (
     ValidatedTaskImagePayload,
     materialize_task_attachments,
@@ -34,8 +35,15 @@ from app.core.harness_capability_invoker import (
 from app.core.harness_session_cleanup import harness_task_workspace_path
 from app.core.harness_v2_engine import (
     HarnessV2Engine,
+    _combine_results,
     _globalize_citations,
+    _is_recoverable_action_protocol_failure,
     _prior_result,
+    _response_task_payload,
+    _sibling_task_intents,
+    _single_task_reply,
+    _turn_planner_message,
+    _turn_skill_projection,
     _with_recoverable_first_session,
 )
 from app.core.task_frame_store import (
@@ -56,6 +64,7 @@ from app.db.models import (
     AgentProfile,
     ChatSession,
     GeneralSkill,
+    HarnessAgentLoopRecord,
     HarnessInvocationRecord,
     HarnessRunRecord,
     HarnessTaskFrameRecord,
@@ -74,7 +83,10 @@ from app.harness.errors import HarnessExecutionError
 from app.knowledge.schema import KnowledgeSearchResponse
 from app.scheduled_tasks.service import (
     _finish_task_schedule,
+    _prepare_scheduled_task_run,
     _scheduled_harness_outcome,
+    _skip_misfired_run,
+    due_scheduled_tasks,
 )
 from app.session.session_schema import (
     ChatAttachmentRead,
@@ -82,6 +94,8 @@ from app.session.session_schema import (
     ChatTurnResponse,
     PlannedTaskFrame,
     SessionPublic,
+    TeamPlannerContext,
+    TeamPlannerMember,
     TurnPlan,
 )
 from app.session.attachment_store import stage_chat_attachment
@@ -106,6 +120,63 @@ def test_first_harness_turn_derives_a_recoverable_session_id() -> None:
     assert first.session_id != other_user.session_id
     assert "client-turn-1" not in first.session_id
     assert request.session_id is None
+
+
+def test_team_tl_turn_keeps_leader_sops_routable() -> None:
+    purchase = Skill(
+        id="skill-purchase-row",
+        tenant_id="tenant-demo",
+        skill_id="purchase",
+        version="1.0.0",
+        name="购买商品流程",
+        content_json={
+            "skill_id": "purchase",
+            "version": "1.0.0",
+            "name": "购买商品流程",
+            "description": "完成商品购买",
+            "business_domain": "commerce",
+            "triggers": ["购买商品"],
+            "slots": [],
+            "nodes": [
+                {
+                    "node_id": "collect_product",
+                    "name": "收集商品",
+                    "description": "确认需要购买的商品",
+                    "node_type": "collect_info",
+                    "expected_user_info": [],
+                    "allowed_actions": ["ask_user"],
+                    "entry_rules": [],
+                    "exit_rules": [],
+                    "transitions": [],
+                }
+            ],
+        },
+        status="published",
+    )
+
+    executable, routable = _turn_skill_projection(
+        [purchase],
+        interaction_mode="team_tl",
+    )
+
+    assert [skill.skill_id for skill in executable] == ["purchase"]
+    assert [skill.skill_id for skill in routable] == ["purchase"]
+
+
+def test_team_planner_receives_only_visible_user_message() -> None:
+    request = ChatTurnRequest(
+        tenant_id="tenant-demo",
+        session_id="session-team",
+        user_id="user-1",
+        message="查询请假制度和采购制度",
+        interaction_mode="team_tl",
+        context_injection="服务端团队目录与调度说明",
+    )
+
+    planner_message = _turn_planner_message(request)
+
+    assert planner_message == "查询请假制度和采购制度"
+    assert "调度说明" not in planner_message
 
 
 def test_agent_loop_has_no_legacy_runtime_switch(monkeypatch) -> None:
@@ -268,6 +339,392 @@ def test_turn_planner_falls_back_to_an_isolated_conversation_frame() -> None:
     assert frame.source_message == "请解释退款规则"
     assert frame.target_skill_id is None
     assert frame.target_step_id is None
+
+
+def test_turn_planner_keeps_team_delegation_as_separate_remote_frames() -> None:
+    plan = TurnPlan(
+        decision="answer_only",
+        user_intent="并行安排人事和行政查询制度",
+        task_frames=[
+            PlannedTaskFrame(
+                task_id="hr-policy",
+                kind="conversation",
+                decision="answer_only",
+                user_intent="安排人事查询请假制度",
+                requirements=["人事查询公司请假制度"],
+                execution_target="team_member",
+                assignee_agent_id="agent-hr",
+            ),
+            PlannedTaskFrame(
+                task_id="admin-policy",
+                kind="conversation",
+                decision="answer_only",
+                user_intent="安排行政查询采购制度",
+                requirements=["行政查询办公用品采购制度"],
+                execution_target="team_member",
+                assignee_agent_id="agent-admin",
+            ),
+        ],
+    )
+
+    normalized = TurnPlanner()._normalize(
+        plan,
+        "请并行安排人事和行政查询制度",
+        _chat_session(),
+        available_skills=[],
+        interaction_mode="team_tl",
+        team_context=TeamPlannerContext(
+            team_id="team-1",
+            leader_agent_id="agent-tl",
+            members=[
+                TeamPlannerMember(agent_id="agent-tl", name="负责人", role="leader"),
+                TeamPlannerMember(agent_id="agent-hr", name="人事", role="member"),
+                TeamPlannerMember(agent_id="agent-admin", name="行政", role="member"),
+            ],
+        ),
+    )
+
+    assert len(normalized.task_frames) == 2
+    assert [frame.execution_target for frame in normalized.task_frames] == [
+        "team_member",
+        "team_member",
+    ]
+    assert [frame.assignee_agent_id for frame in normalized.task_frames] == [
+        "agent-hr",
+        "agent-admin",
+    ]
+    assert all(frame.depends_on_task_ids == [] for frame in normalized.task_frames)
+
+
+def test_turn_planner_does_not_merge_normal_conversation_frames() -> None:
+    plan = TurnPlan(
+        decision="answer_only",
+        user_intent="完成两个独立查询",
+        task_frames=[
+            PlannedTaskFrame(
+                kind="conversation",
+                decision="answer_only",
+                requirements=["查询甲"],
+            ),
+            PlannedTaskFrame(
+                kind="conversation",
+                decision="answer_only",
+                requirements=["查询乙"],
+            ),
+        ],
+    )
+
+    normalized = TurnPlanner()._normalize(
+        plan,
+        "完成两个独立查询",
+        _chat_session(),
+        available_skills=[],
+    )
+
+    assert [frame.requirements for frame in normalized.task_frames] == [
+        ["查询甲"],
+        ["查询乙"],
+    ]
+
+
+@pytest.mark.parametrize(
+    "status",
+    ["completed", "awaiting_user", "handoff", "failed", "blocked", "action_budget"],
+)
+def test_single_task_reply_uses_harness_finish_reply(status: str) -> None:
+    result = TaskExecutionResult(
+        task_frame_id="task-1",
+        status=status,
+        reply_fragment="  Harness 已生成的用户回复。  ",
+    )
+
+    assert _single_task_reply([result]) == "Harness 已生成的用户回复。"
+
+
+def test_single_task_reply_keeps_multi_task_and_empty_reply_on_synthesis_path() -> None:
+    completed = TaskExecutionResult(
+        task_frame_id="task-1",
+        status="completed",
+        reply_fragment="第一个任务结果",
+    )
+    awaiting = TaskExecutionResult(
+        task_frame_id="task-2",
+        status="awaiting_user",
+        reply_fragment="请补充第二个任务的信息",
+    )
+    empty = TaskExecutionResult(
+        task_frame_id="task-3",
+        status="completed",
+        reply_fragment="  ",
+    )
+
+    assert _single_task_reply([completed, awaiting]) is None
+    assert _single_task_reply([empty]) is None
+
+
+def test_single_task_reply_synthesizes_incomplete_structured_projection() -> None:
+    structured_result = {
+        "requirements": ["需求分析", "FS 草稿", "追踪矩阵"],
+        "status": "complete",
+    }
+    incomplete = TaskExecutionResult(
+        task_frame_id="task-incomplete-json",
+        status="completed",
+        reply_fragment="{",
+        structured_result=structured_result,
+    )
+    matching = incomplete.model_copy(
+        update={
+            "reply_fragment": json.dumps(
+                structured_result,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        }
+    )
+    markdown = incomplete.model_copy(update={"reply_fragment": "完整结果如下。"})
+
+    assert _single_task_reply([incomplete]) is None
+    assert _single_task_reply([matching]) == matching.reply_fragment
+    assert _single_task_reply([markdown]) == "完整结果如下。"
+
+
+def test_response_task_payload_keeps_structured_result_for_synthesis() -> None:
+    structured_result = {"fs": {"title": "ClickHouse 分析面板"}}
+    result = TaskExecutionResult(
+        task_frame_id="task-structured",
+        status="completed",
+        reply_fragment="{",
+        structured_result=structured_result,
+    )
+
+    payload = _response_task_payload(
+        SimpleNamespace(
+            user_intent="生成完整需求结果",
+            task_id="task-structured",
+            step_id="generate",
+            slots_json={},
+        ),
+        result,
+        None,
+        harness_v2_engine_module._step_result(result),
+    )
+
+    assert payload["structured_result"] == structured_result
+
+
+def test_harness_finish_prompt_requires_user_visible_markdown_layout() -> None:
+    prompt = harness_agent_module.PROMPT_PATH.read_text(encoding="utf-8")
+
+    assert "用户可见回复排版规则（适用于 `finish.reply_fragment`）" in prompt
+    assert "必须用 `##` 或 `###` 小标题分组" in prompt
+    assert "每一项独立成行" in prompt
+    assert "不要添加“结构化完成报告”" in prompt
+    assert "不要在 JSON 对象之外输出 Markdown" in prompt
+
+
+def test_combine_results_exposes_only_terminal_sop_step_reply() -> None:
+    collected_name = TaskExecutionResult(
+        task_frame_id="task-purchase",
+        status="completed",
+        reply_fragment="已记录姓名，请确认是否继续进入下单确认环节？",
+        task_summary="已记录购买人姓名",
+        slot_updates={"user_name": "hm"},
+        action_count=1,
+    )
+    awaiting_confirmation = TaskExecutionResult(
+        task_frame_id="task-purchase",
+        status="awaiting_user",
+        reply_fragment="请确认商品 a1、数量 1 是否正确，以便生成订单。",
+        task_summary="等待用户确认订单",
+        action_count=1,
+    )
+
+    combined = _combine_results(
+        "task-purchase",
+        [collected_name, awaiting_confirmation],
+    )
+
+    assert combined.status == "awaiting_user"
+    assert combined.reply_fragment == "请确认商品 a1、数量 1 是否正确，以便生成订单。"
+    assert combined.task_summary == "已记录购买人姓名；等待用户确认订单"
+    assert combined.slot_updates == {"user_name": "hm"}
+    assert combined.action_count == 2
+
+
+def test_turn_planner_routes_handoff_human_to_sop_handoff_node() -> None:
+    """When router decides handoff_human and an active SOP has a handoff node,
+    the planner should create an SOP frame targeting that node instead of a
+    conversation frame. This ensures harness executes the handoff node and
+    reads its assignee_user_id for Feishu notification."""
+    skill = Skill(
+        id="skill-repair",
+        tenant_id="tenant-demo",
+        skill_id="repair_sop",
+        name="维修流程",
+        status="published",
+        content_json={
+            "start_node_id": "collect_issue",
+            "nodes": [
+                {
+                    "node_id": "collect_issue",
+                    "name": "收集故障信息",
+                    "instruction": "了解电脑故障详情。",
+                    "expected_user_info": ["issue_description"],
+                },
+                {
+                    "node_id": "handoff_to_specialist",
+                    "name": "转接维修专家",
+                    "type": "handoff",
+                    "assignee_user_id": "user_specialist_001",
+                    "allowed_actions": ["handoff_human"],
+                },
+            ],
+            "edges": [
+                {
+                    "source_node_id": "collect_issue",
+                    "next_node_id": "handoff_to_specialist",
+                    "condition": "slots_complete",
+                }
+            ],
+        },
+    )
+    session = _chat_session(
+        active_skill_id="repair_sop",
+        active_step_id="collect_issue",
+    )
+    plan = TurnPlan(
+        decision="handoff_human",
+        user_intent="电脑开不了机",
+        task_frames=[],
+    )
+
+    normalized = TurnPlanner()._normalize(
+        plan,
+        "我的电脑开不了机了",
+        session,
+        available_skills=[skill],
+    )
+
+    assert normalized.decision == "handoff_human"
+    assert len(normalized.task_frames) == 1
+    frame = normalized.task_frames[0]
+    assert frame.kind == "sop"
+    assert frame.decision == "handoff_human"
+    assert frame.target_skill_id == "repair_sop"
+    assert frame.target_step_id == "handoff_to_specialist"
+    assert frame.task_id
+
+
+def test_turn_planner_handoff_human_falls_back_to_conversation_without_handoff_node() -> None:
+    """When router decides handoff_human but the active SOP has no handoff
+    node, the planner falls back to a conversation frame so the harness
+    conversation-handoff path still fires."""
+    skill = Skill(
+        id="skill-refund",
+        tenant_id="tenant-demo",
+        skill_id="refund",
+        name="退款流程",
+        status="published",
+        content_json={
+            "start_node_id": "collect",
+            "nodes": [
+                {
+                    "node_id": "collect",
+                    "name": "收集退款信息",
+                    "instruction": "核对订单号并收集退款原因。",
+                    "expected_user_info": ["order_id"],
+                }
+            ],
+            "edges": [],
+        },
+    )
+    session = _chat_session(
+        active_skill_id="refund",
+        active_step_id="collect",
+    )
+    plan = TurnPlan(
+        decision="handoff_human",
+        user_intent="我要找人工客服",
+        task_frames=[],
+    )
+
+    normalized = TurnPlanner()._normalize(
+        plan,
+        "我要找人工客服",
+        session,
+        available_skills=[skill],
+    )
+
+    assert normalized.decision == "handoff_human"
+    assert len(normalized.task_frames) == 1
+    frame = normalized.task_frames[0]
+    assert frame.kind == "conversation"
+    assert frame.decision == "handoff_human"
+    assert frame.target_skill_id is None
+    assert frame.target_step_id is None
+
+
+def test_turn_planner_handoff_human_picks_reachable_handoff_node() -> None:
+    """When multiple handoff nodes exist, the planner should pick the one
+    reachable from the current node via edges, not the first in array order."""
+    skill = Skill(
+        id="skill-multi-handoff",
+        tenant_id="tenant-demo",
+        skill_id="multi_handoff_sop",
+        name="多分支转人工",
+        status="published",
+        content_json={
+            "start_node_id": "intake",
+            "nodes": [
+                {
+                    "node_id": "intake",
+                    "name": "接待",
+                    "instruction": "了解需求。",
+                },
+                {
+                    "node_id": "handoff_sales",
+                    "name": "转销售",
+                    "type": "handoff",
+                    "assignee_user_id": "user_sales",
+                    "allowed_actions": ["handoff_human"],
+                },
+                {
+                    "node_id": "handoff_tech",
+                    "name": "转技术",
+                    "type": "handoff",
+                    "assignee_user_id": "user_tech",
+                    "allowed_actions": ["handoff_human"],
+                },
+            ],
+            "edges": [
+                {"source_node_id": "intake", "next_node_id": "handoff_tech"},
+                # handoff_sales is NOT reachable from intake
+            ],
+        },
+    )
+    session = _chat_session(
+        active_skill_id="multi_handoff_sop",
+        active_step_id="intake",
+    )
+    plan = TurnPlan(
+        decision="handoff_human",
+        user_intent="技术问题",
+        task_frames=[],
+    )
+
+    normalized = TurnPlanner()._normalize(
+        plan,
+        "遇到技术问题",
+        session,
+        available_skills=[skill],
+    )
+
+    assert normalized.decision == "handoff_human"
+    assert len(normalized.task_frames) == 1
+    frame = normalized.task_frames[0]
+    assert frame.kind == "sop"
+    assert frame.target_step_id == "handoff_tech"
 
 
 def test_turn_plan_defaults_null_container_fields() -> None:
@@ -521,6 +978,7 @@ def test_task_request_compiler_builds_a_composite_requirement_without_outer_cont
                 "materialized": True,
             }
         ],
+        out_of_scope_task_intents=["查询北京天气", "查询北京天气"],
     )
 
     assert requirement.task_frame_id == "task-refund"
@@ -547,10 +1005,47 @@ def test_task_request_compiler_builds_a_composite_requirement_without_outer_cont
             "materialized": True,
         }
     ]
+    assert requirement.out_of_scope_task_intents == ["查询北京天气"]
     dumped = requirement.model_dump(mode="json")
     assert "source_message" not in dumped
     assert "conversation_context" not in dumped
     assert "OUTER_CONTEXT_MUST_NOT_LEAK" not in json.dumps(dumped, ensure_ascii=False)
+
+
+def test_sibling_task_intents_only_returns_other_frames_from_same_turn() -> None:
+    engine = _test_engine()
+    with Session(engine) as db:
+        current = HarnessTaskFrameRecord(
+            id="htask-purchase",
+            tenant_id="tenant-demo",
+            session_id="session-shared-turn",
+            source_turn_id="message-compound",
+            task_id="task-purchase",
+            kind="sop",
+            user_intent="购买商品 a1",
+        )
+        weather = HarnessTaskFrameRecord(
+            id="htask-weather",
+            tenant_id="tenant-demo",
+            session_id="session-shared-turn",
+            source_turn_id="message-compound",
+            task_id="task-weather",
+            kind="conversation",
+            user_intent="查询北京天气",
+        )
+        older = HarnessTaskFrameRecord(
+            id="htask-older",
+            tenant_id="tenant-demo",
+            session_id="session-shared-turn",
+            source_turn_id="message-older",
+            task_id="task-older",
+            kind="conversation",
+            user_intent="查询上海天气",
+        )
+        db.add_all([current, weather, older])
+        db.commit()
+
+        assert _sibling_task_intents(db, current) == ["查询北京天气"]
 
 
 def test_task_requirement_only_marks_explicitly_required_node_capabilities() -> None:
@@ -686,14 +1181,14 @@ def test_staged_image_is_both_a_sandbox_file_and_vision_payload(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
-    raw = b"img"
+    raw = b"\x89PNG\r\n\x1a\n"
     parsed = ChatAttachmentRead(
         id="image-staged",
         filename="screen.png",
         content_type="image/png",
         size=len(raw),
         kind="image",
-        data_url="data:image/png;base64,aW1n",
+        data_url="data:image/png;base64,iVBORw0KGgo=",
     )
     attachment = stage_chat_attachment(
         parsed,
@@ -836,11 +1331,11 @@ def test_capability_manifest_only_exposes_current_step_sop_specific_resources() 
     )
     operation_schema = shared_descriptor.input_schema["properties"]["operation"]
     assert operation_schema["type"] == "string"
-    assert operation_schema["enum"] == ["read", "execute"]
+    assert operation_schema["enum"] == ["read"]
     assert "default" not in operation_schema
     assert shared_descriptor.input_schema["required"] == ["query", "operation"]
-    assert shared_descriptor.metadata["execution_policy"] == "inspect_then_decide"
-    assert shared_descriptor.metadata["script_execution"] == ("explicit_after_read")
+    assert shared_descriptor.metadata["execution_policy"] == "instructions_only"
+    assert shared_descriptor.metadata["script_execution"] == "use_harness_tools"
 
 
 def test_general_tools_remain_discoverable_across_sop_steps() -> None:
@@ -1094,6 +1589,105 @@ def test_one_shot_scheduled_task_stays_retryable_when_harness_needs_input() -> N
         assert task.status == "paused"
         assert task.last_status == "needs_input"
         assert task.next_run_at is None
+
+
+def test_due_scheduled_tasks_completes_expired_task_without_claiming_it() -> None:
+    engine = _test_engine()
+    now = utc_now()
+    with Session(engine) as db:
+        task = ScheduledTask(
+            id="scheduled-expired",
+            tenant_id="tenant-demo",
+            agent_id="agent-1",
+            created_by_user_id="user-1",
+            title="已过期任务",
+            prompt="不应执行",
+            schedule_type="daily",
+            schedule_json={"time": "09:00"},
+            timezone="UTC",
+            status="active",
+            next_run_at=now - timedelta(minutes=2),
+            end_at=now - timedelta(minutes=1),
+        )
+        db.add(task)
+        db.commit()
+
+        assert due_scheduled_tasks(db, now=now) == []
+        db.refresh(task)
+        assert task.status == "completed"
+        assert task.next_run_at is None
+        assert task.lease_owner is None
+
+
+def test_skip_misfire_records_skip_and_advances_past_backlog() -> None:
+    engine = _test_engine()
+    now = utc_now()
+    scheduled_for = now - timedelta(days=3)
+    with Session(engine) as db:
+        task = ScheduledTask(
+            id="scheduled-misfire-skip",
+            tenant_id="tenant-demo",
+            agent_id="agent-1",
+            created_by_user_id="user-1",
+            title="跳过积压任务",
+            prompt="不应补跑",
+            schedule_type="daily",
+            schedule_json={"time": "09:00"},
+            timezone="UTC",
+            status="active",
+            misfire_policy="skip",
+            next_run_at=scheduled_for,
+        )
+        db.add(task)
+        db.commit()
+
+        run = _skip_misfired_run(db, task, scheduled_for, manual=False)
+
+        assert run is not None
+        assert run.status == "skipped"
+        assert task.run_count == 1
+        assert task.next_run_at is not None
+        assert task.next_run_at > now
+
+
+def test_retrying_scheduled_run_reuses_same_run_and_session() -> None:
+    engine = _test_engine()
+    now = utc_now()
+    with Session(engine) as db:
+        task = ScheduledTask(
+            id="scheduled-retry",
+            tenant_id="tenant-demo",
+            agent_id="agent-1",
+            created_by_user_id="user-1",
+            title="冲突后重试",
+            prompt="继续执行",
+            schedule_type="daily",
+            schedule_json={"time": "09:00"},
+            timezone="UTC",
+            status="active",
+            next_run_at=now,
+        )
+        run = ScheduledTaskRun(
+            id="scheduled-run-retry",
+            tenant_id=task.tenant_id,
+            scheduled_task_id=task.id,
+            agent_id=task.agent_id,
+            user_id=task.created_by_user_id,
+            session_id="scheduled-session-retry",
+            scheduled_for=now,
+            status="retrying",
+            error="HARNESS_TURN_CONFLICT",
+        )
+        db.add(task)
+        db.add(run)
+        db.commit()
+
+        claimed = _prepare_scheduled_task_run(db, task, now, manual=False)
+
+        assert claimed.id == run.id
+        assert claimed.session_id == run.session_id
+        assert claimed.status == "running"
+        assert claimed.error is None
 
 
 def test_external_tool_names_cannot_shadow_later_builtin_capabilities() -> None:
@@ -1641,7 +2235,70 @@ def test_general_skill_harness_tool_reads_full_package_when_requested(
         "scripts/run.sh",
     ]
     assert read_result["data"]["operation"] == "read"
-    assert "只有确实需要" in read_result["data"]["notice"]
+    assert read_result["data"]["package_root"].startswith(
+        ".harness/skill-packages/runner-"
+    )
+    assert read_result["data"]["entrypoint_path"].endswith("/SKILL.md")
+    assert read_result["data"]["file_paths"] == [
+        f'{read_result["data"]["package_root"]}/SKILL.md',
+        f'{read_result["data"]["package_root"]}/scripts/run.sh',
+    ]
+    assert (
+        invoker.workspace_root / read_result["data"]["file_paths"][1]
+    ).read_text(encoding="utf-8") == "echo ok"
+    assert "不会生成临时代码" in read_result["data"]["notice"]
+
+
+def test_exec_command_nonzero_exit_is_a_failed_capability_result(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
+    descriptor = CapabilityDescriptor(
+        capability_id="builtin.exec-command",
+        name="exec_command",
+        kind="file",
+    )
+    engine = _test_engine()
+    with Session(engine) as db:
+        invoker = HarnessCapabilityInvoker(
+            db,
+            tenant_id="tenant-demo",
+            session=_chat_session(user_id="user-1"),
+            task_frame_id="task-command-failed",
+            model_config=_model_config(),
+            manifest=CapabilityManifest(available=[descriptor]),
+            active_skill=None,
+            active_step_id=None,
+            agent_id=None,
+        )
+        invoker._file_executor = SimpleNamespace(
+            execute=lambda _context, _call: SimpleNamespace(
+                success=True,
+                data={
+                    "status": "failed",
+                    "ok": False,
+                    "exit_code": 2,
+                    "timed_out": False,
+                    "stdout": "",
+                    "stderr": "missing script",
+                },
+                error=None,
+                duration_ms=4,
+            )
+        )
+
+        result = invoker._invoke_file(
+            "exec_command",
+            {"command": "python3 missing.py"},
+            call_id="call-command-failed",
+        )
+
+    assert result["success"] is False
+    assert result["error"]["code"] == "COMMAND_EXIT_NONZERO"
+    assert result["error"]["retryable"] is False
+    assert result["data"]["exit_code"] == 2
+    assert result["data"]["stderr"] == "missing script"
 
 
 def test_general_skill_harness_tool_defaults_to_read_instead_of_generating_code(
@@ -1671,7 +2328,7 @@ def test_general_skill_harness_tool_defaults_to_read_instead_of_generating_code(
         raise AssertionError("instruction loading must not generate a runner")
 
     monkeypatch.setattr(
-        "app.core.harness_capability_invoker.GeneralSkillRunner.run",
+        "app.general_skills.runner.GeneralSkillRunner.run",
         unexpected_run,
     )
     engine = _test_engine()
@@ -1734,7 +2391,7 @@ def test_harness_task_agent_stops_when_sop_step_deadline_is_exhausted() -> None:
     assert trace_events[0][0] == "harness_step_timeout"
 
 
-def test_general_skill_harness_tool_rejects_execute_before_read(
+def test_general_skill_harness_tool_treats_legacy_execute_as_instruction_load(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -1758,10 +2415,10 @@ def test_general_skill_harness_tool_rejects_execute_before_read(
     )
 
     def unexpected_run(*_args, **_kwargs):
-        raise AssertionError("execute must be fenced until the package is read")
+        raise AssertionError("business Harness must not generate a skill runner")
 
     monkeypatch.setattr(
-        "app.core.harness_capability_invoker.GeneralSkillRunner.run",
+        "app.general_skills.runner.GeneralSkillRunner.run",
         unexpected_run,
     )
     engine = _test_engine()
@@ -1785,11 +2442,13 @@ def test_general_skill_harness_tool_rejects_execute_before_read(
             {"query": "run it", "operation": "execute"},
         )
 
-    assert result["success"] is False
-    assert result["error"]["code"] == "GENERAL_SKILL_NOT_INSPECTED"
+    assert result["success"] is True
+    assert result["data"]["operation"] == "read"
+    assert result["data"]["requested_operation"] == "execute"
+    assert "已弃用" in result["data"]["compatibility_notice"]
 
 
-def test_general_skill_harness_tool_executes_frozen_runner_snapshot(
+def test_general_skill_harness_tool_never_executes_generated_runner(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -1851,7 +2510,7 @@ def test_general_skill_harness_tool_executes_frozen_runner_snapshot(
         )
 
     monkeypatch.setattr(
-        "app.core.harness_capability_invoker.GeneralSkillRunner.run",
+        "app.general_skills.runner.GeneralSkillRunner.run",
         fake_run,
     )
     skill = GeneralSkill(
@@ -1910,30 +2569,20 @@ def test_general_skill_harness_tool_executes_frozen_runner_snapshot(
         )
 
     assert result["success"] is True
-    assert result["data"]["operation"] == "execute"
-    assert result["data"]["structured_result"]["temperature"] == 30
-    assert result["artifacts"][0]["display_name"] == "北京天气.txt"
-    assert result["artifacts"][0]["path"] == "general_skill_fake/outputs/weather.txt"
-    assert result["artifacts"][0]["size"] == 4
-    assert captured["query"] == "北京天气如何"
-    assert captured["user_id"] == "user-1"
-    assert captured["max_attempts"] == 2
-    assert captured["workspace_root"] == invoker.workspace_root
-    assert captured["is_cancelled"] is cancelled
-    assert captured["skill"] is not skill
-    assert captured["skill"].package_digest
+    assert result["data"]["operation"] == "read"
+    assert result["data"]["requested_operation"] == "execute"
+    assert "不会生成" in result["data"]["notice"]
+    assert captured == {}
     assert [event_type for event_type, _ in trace_events] == [
         "general_skill_trace",
         "general_skill_trace",
-        "general_skill_run_finished",
     ]
     assert trace_events[0][1]["phase"] == "instructions_loaded"
-    assert trace_events[1][1]["phase"] == "plan_created"
+    assert trace_events[1][1]["phase"] == "instructions_loaded"
     assert trace_events[1][1]["skill_slug"] == "weather"
-    assert trace_events[2][1]["success"] is True
 
 
-def test_general_skill_harness_tool_preserves_structured_sandbox_failure(
+def test_general_skill_harness_tool_does_not_enter_legacy_sandbox_runner(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -1946,7 +2595,7 @@ def test_general_skill_harness_tool_preserves_structured_sandbox_failure(
         )
 
     monkeypatch.setattr(
-        "app.core.harness_capability_invoker.GeneralSkillRunner.run",
+        "app.general_skills.runner.GeneralSkillRunner.run",
         fail_run,
     )
     skill = GeneralSkill(
@@ -1995,16 +2644,12 @@ def test_general_skill_harness_tool_preserves_structured_sandbox_failure(
             {"query": "run", "operation": "execute"},
         )
 
-    assert result["success"] is False
-    assert result["error"] == {
-        "code": "SANDBOX_POLICY_UNSUPPORTED",
-        "message": "当前沙盒不支持域名白名单。",
-        "retryable": False,
-        "infrastructure_failure": True,
-    }
+    assert result["success"] is True
+    assert result["data"]["operation"] == "read"
+    assert result["data"]["requested_operation"] == "execute"
 
 
-def test_general_skill_harness_tool_publishes_valid_artifact_among_failures(
+def test_general_skill_harness_tool_does_not_publish_legacy_runner_artifacts(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -2051,7 +2696,7 @@ def test_general_skill_harness_tool_publishes_valid_artifact_among_failures(
         )
 
     monkeypatch.setattr(
-        "app.core.harness_capability_invoker.GeneralSkillRunner.run",
+        "app.general_skills.runner.GeneralSkillRunner.run",
         fake_run,
     )
     skill = GeneralSkill(
@@ -2100,14 +2745,9 @@ def test_general_skill_harness_tool_publishes_valid_artifact_among_failures(
         )
 
     assert result["success"] is True
-    assert [item["path"] for item in result["artifacts"]] == [
-        "general_skill_mixed/artifacts/valid.txt"
-    ]
-    assert [item["code"] for item in result["data"]["artifact_errors"]] == [
-        "artifact_declaration_invalid",
-        "artifact_publish_failed",
-        "artifact_publish_failed",
-    ]
+    assert result["data"]["operation"] == "read"
+    assert result["data"]["requested_operation"] == "execute"
+    assert "artifacts" not in result
 
 
 def test_harness_agent_enforces_tool_allowlist_and_keeps_an_isolated_transcript(
@@ -2216,8 +2856,485 @@ def test_harness_agent_enforces_tool_allowlist_and_keeps_an_isolated_transcript(
     assert second_transcript[0]["result"]["error"]["code"] == "TOOL_NOT_AVAILABLE"
     assert "OUTER_CONTEXT_MUST_NOT_LEAK" not in json.dumps(payloads, ensure_ascii=False)
     assert "不得为了“更精准”而在零检索、零工具结果时提前结束" in system_prompts[0]
-    assert "首次调用某个" in system_prompts[0]
-    assert "不得跳过 read 直接 execute" in system_prompts[0]
+    assert "GeneralSkill 是工作流说明包" in system_prompts[0]
+    assert "不会启动第二套 runner" in system_prompts[0]
+    assert "Skill 负责提供工作流程" in system_prompts[0]
+
+
+def test_harness_agent_adapts_bare_json_after_loading_general_skill(
+    monkeypatch,
+) -> None:
+    business_result = {
+        "function": "ZRFC_HR_GET_PERNR_INFO",
+        "params": '{"I_ENAME":"张三","I_BS":"1"}',
+    }
+    actions = iter(
+        [
+            {
+                "action": "tool",
+                "tool_name": "general_skill.rfc-params",
+                "arguments": {
+                    "operation": "read",
+                    "query": "查询已入职员工张三的信息",
+                },
+            },
+            business_result,
+        ]
+    )
+
+    class FakeLLMClient:
+        def __init__(self, _model_config: ModelConfig):
+            pass
+
+        def generate_json(self, _system_prompt, _payload):
+            return next(actions)
+
+    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    invoked: list[tuple[str, dict[str, object]]] = []
+    trace_events: list[tuple[str, dict[str, object]]] = []
+
+    def invoke_tool(name: str, arguments: dict[str, object]) -> dict[str, object]:
+        invoked.append((name, arguments))
+        return {
+            "success": True,
+            "data": {
+                "kind": "general_skill",
+                "slug": "rfc-params",
+                "operation": "read",
+                "package": {
+                    "files": [
+                        {
+                            "path": "SKILL.md",
+                            "content_preview": "只返回固定业务 JSON，不执行函数。",
+                        }
+                    ]
+                },
+            },
+        }
+
+    result = HarnessTaskAgent().run(
+        TaskRequirement(
+            task_frame_id="task-rfc-params",
+            kind="conversation",
+            goal="把自然语言转换为 SAP RFC 参数",
+            required_capability_names=["general_skill.rfc-params"],
+            capability_manifest=CapabilityManifest(
+                available=[
+                    CapabilityDescriptor(
+                        capability_id="skill-rfc-params",
+                        name="general_skill.rfc-params",
+                        kind="general_skill",
+                    )
+                ]
+            ),
+        ),
+        _model_config(),
+        invoke_tool,
+        max_actions=2,
+        trace_sink=lambda event_type, payload: trace_events.append(
+            (event_type, payload)
+        ),
+    )
+
+    assert result.status == "completed"
+    assert result.action_count == 2
+    assert result.structured_result == business_result
+    assert result.reply_fragment == (
+        '{"function":"ZRFC_HR_GET_PERNR_INFO",'
+        '"params":"{\\"I_ENAME\\":\\"张三\\",\\"I_BS\\":\\"1\\"}"}'
+    )
+    assert invoked == [
+        (
+            "general_skill.rfc-params",
+            {
+                "operation": "read",
+                "query": "查询已入职员工张三的信息",
+            },
+        )
+    ]
+    assert any(
+        event_type == "harness_structured_result_adapted"
+        and payload["source"] == "general_skill.rfc-params"
+        for event_type, payload in trace_events
+    )
+    assert not any(
+        event_type == "harness_action_failed"
+        for event_type, _payload in trace_events
+    )
+
+
+def test_harness_agent_does_not_adapt_bare_json_without_loaded_general_skill(
+    monkeypatch,
+) -> None:
+    class FakeLLMClient:
+        def __init__(self, _model_config: ModelConfig):
+            pass
+
+        def generate_json(self, _system_prompt, _payload):
+            return {
+                "function": "ZRFC_HR_GET_PERNR_INFO",
+                "params": '{"I_ENAME":"张三","I_BS":"1"}',
+            }
+
+    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+
+    result = HarnessTaskAgent().run(
+        TaskRequirement(
+            task_frame_id="task-invalid-bare-json",
+            kind="conversation",
+            goal="普通任务",
+            capability_manifest=CapabilityManifest(),
+        ),
+        _model_config(),
+        lambda _name, _arguments: {
+            "success": True,
+        },
+        max_actions=1,
+    )
+
+    assert result.status == "failed"
+    assert result.error is not None
+    assert result.error["code"] == "HARNESS_ACTION_INVALID"
+    assert result.structured_result is None
+
+
+def test_harness_agent_repairs_invalid_tool_action_envelope_once(
+    monkeypatch,
+) -> None:
+    payloads: list[dict[str, object]] = []
+    actions = iter(
+        [
+            {
+                "action": "capability_describe",
+                "arguments": {"capabilities": ["orders.lookup"]},
+            },
+            {
+                "action": "tool",
+                "tool_name": "capability_describe",
+                "arguments": {"capabilities": ["orders.lookup"]},
+            },
+            {
+                "action": "finish",
+                "status": "completed",
+                "reply_fragment": "已完成。",
+            },
+        ]
+    )
+
+    class FakeLLMClient:
+        def __init__(self, _model_config: ModelConfig):
+            pass
+
+        def generate_json(self, _system_prompt, payload):
+            payloads.append(deepcopy(payload))
+            return next(actions)
+
+    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    invoked: list[str] = []
+    trace_events: list[tuple[str, dict[str, object]]] = []
+
+    result = HarnessTaskAgent().run(
+        TaskRequirement(
+            task_frame_id="task-repair-action-envelope",
+            kind="conversation",
+            goal="查询订单",
+            capability_manifest=CapabilityManifest(
+                available=[
+                    CapabilityDescriptor(
+                        capability_id="builtin.capability-describe",
+                        name="capability_describe",
+                        kind="internal",
+                    )
+                ]
+            ),
+        ),
+        _model_config(),
+        lambda name, _arguments: (
+            invoked.append(name) or {"success": True, "data": {}}
+        ),
+        max_actions=2,
+        trace_sink=lambda event_type, payload: trace_events.append(
+            (event_type, payload)
+        ),
+    )
+
+    assert result.status == "completed"
+    assert result.action_count == 2
+    assert invoked == ["capability_describe"]
+    assert "protocol_repair" not in payloads[0]
+    assert payloads[1]["protocol_repair"]["invalid_output"]["action"] == (
+        "capability_describe"
+    )
+    assert sum(
+        event_type == "harness_action_repair_requested"
+        for event_type, _payload in trace_events
+    ) == 1
+
+
+def test_harness_agent_executes_consecutive_json_actions_in_order(
+    monkeypatch,
+) -> None:
+    outputs = iter(
+        [
+            [
+                {
+                    "action": "tool",
+                    "tool_name": "skill.first",
+                    "arguments": {"query": "first"},
+                },
+                {
+                    "action": "tool",
+                    "tool_name": "skill.second",
+                    "arguments": {"query": "second"},
+                },
+            ],
+            {
+                "action": "finish",
+                "status": "completed",
+                "reply_fragment": "两个能力均已执行。",
+            },
+        ]
+    )
+
+    class FakeLLMClient:
+        def __init__(self, _model_config: ModelConfig):
+            pass
+
+        def generate_json_sequence(self, _system_prompt, _payload):
+            return next(outputs)
+
+    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    invoked: list[tuple[str, dict[str, object]]] = []
+    trace_events: list[tuple[str, dict[str, object]]] = []
+
+    result = HarnessTaskAgent().run(
+        TaskRequirement(
+            task_frame_id="task-consecutive-actions",
+            kind="conversation",
+            goal="依次执行两个能力",
+            capability_manifest=CapabilityManifest(
+                available=[
+                    CapabilityDescriptor(
+                        capability_id="skill-first",
+                        name="skill.first",
+                        kind="tool",
+                    ),
+                    CapabilityDescriptor(
+                        capability_id="skill-second",
+                        name="skill.second",
+                        kind="tool",
+                    ),
+                ]
+            ),
+        ),
+        _model_config(),
+        lambda name, arguments: (
+            invoked.append((name, arguments))
+            or {"success": True, "data": {"tool": name}}
+        ),
+        max_actions=3,
+        trace_sink=lambda event_type, payload: trace_events.append(
+            (event_type, payload)
+        ),
+    )
+
+    assert result.status == "completed"
+    assert result.action_count == 3
+    assert invoked == [
+        ("skill.first", {"query": "first"}),
+        ("skill.second", {"query": "second"}),
+    ]
+    assert sum(
+        event_type == "harness_action_created"
+        for event_type, _payload in trace_events
+    ) == 3
+    assert any(
+        event_type == "harness_action_sequence_accepted"
+        and payload["action_count"] == 2
+        for event_type, payload in trace_events
+    )
+
+
+def test_invalid_action_protocol_failure_keeps_sop_loop_recoverable() -> None:
+    failure = TaskExecutionResult(
+        task_frame_id="task-purchase",
+        status="failed",
+        reply_fragment="当前任务的执行模型没有返回有效动作。",
+        error={"code": "HARNESS_ACTION_INVALID"},
+    )
+    business_failure = failure.model_copy(
+        update={"error": {"code": "TOOL_EXECUTION_FAILED"}}
+    )
+
+    assert _is_recoverable_action_protocol_failure(failure) is True
+    assert _is_recoverable_action_protocol_failure(business_failure) is False
+
+
+def test_failed_following_sop_step_keeps_completed_checkpoint_reply() -> None:
+    completed = TaskExecutionResult(
+        task_frame_id="task-price-compare",
+        status="completed",
+        reply_fragment="A1 为 129 CNY，A3 为 239 CNY，差价 110 CNY。",
+        task_summary="已查询两件商品并计算差价。",
+        next_step_id="query_prices",
+    )
+    failed = TaskExecutionResult(
+        task_frame_id="task-price-compare",
+        status="failed",
+        reply_fragment="当前任务的执行模型没有返回有效动作。",
+        task_summary="Harness 动作解析失败。",
+        error={"code": "HARNESS_ACTION_INVALID", "message": "Connection error"},
+        action_count=1,
+    )
+
+    deferred = harness_v2_engine_module._defer_failed_step_after_completed_checkpoint(
+        failed,
+        [completed],
+    )
+
+    assert deferred.status == "action_budget"
+    assert deferred.reply_fragment == completed.reply_fragment
+    assert deferred.next_step_id is None
+    assert deferred.error == failed.error
+    assert deferred.action_count == 1
+
+
+def test_harness_agent_blocks_repeated_non_retryable_action(
+    monkeypatch,
+) -> None:
+    repeated_action = {
+        "action": "tool",
+        "tool_name": "exec_command",
+        "arguments": {"command": "sleep 1 &"},
+    }
+    actions = iter(
+        [
+            repeated_action,
+            repeated_action,
+            {
+                "action": "finish",
+                "status": "completed",
+                "reply_fragment": "已停止重复执行并说明限制。",
+                "task_summary": "重复的不可重试动作未再次执行。",
+            },
+        ]
+    )
+
+    class FakeLLMClient:
+        def __init__(self, _model_config: ModelConfig):
+            pass
+
+        def generate_json(self, _system_prompt, _payload):
+            return next(actions)
+
+    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    invoked: list[tuple[str, dict[str, object]]] = []
+
+    def invoke_tool(name: str, arguments: dict[str, object]) -> dict[str, object]:
+        invoked.append((name, arguments))
+        return {
+            "success": False,
+            "error": {
+                "code": "COMMAND_DENIED",
+                "message": "Dangerous or nested shell command is not allowed.",
+                "retryable": False,
+            },
+        }
+
+    result = HarnessTaskAgent().run(
+        TaskRequirement(
+            task_frame_id="task-no-command-retry",
+            kind="conversation",
+            goal="读取附件",
+            capability_manifest=CapabilityManifest(
+                available=[
+                    CapabilityDescriptor(
+                        capability_id="builtin.exec-command",
+                        name="exec_command",
+                        kind="internal",
+                    )
+                ]
+            ),
+        ),
+        _model_config(),
+        invoke_tool,
+        max_actions=3,
+    )
+
+    assert result.status == "completed"
+    assert result.error is None
+    assert invoked == [
+        (
+            "exec_command",
+            {"command": "sleep 1 &"},
+        )
+    ]
+
+
+def test_harness_agent_does_not_restore_non_retryable_failures_from_checkpoint(
+    monkeypatch,
+) -> None:
+    action = {
+        "action": "tool",
+        "tool_name": "read_file",
+        "arguments": {"path": "results/current.json"},
+    }
+    actions = iter(
+        [
+            action,
+            {
+                "action": "finish",
+                "status": "completed",
+                "reply_fragment": "读取完成。",
+                "task_summary": "已在新一轮重新读取。",
+            },
+        ]
+    )
+
+    class FakeLLMClient:
+        def __init__(self, _model_config: ModelConfig):
+            pass
+
+        def generate_json(self, _system_prompt, _payload):
+            return next(actions)
+
+    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    invoked: list[tuple[str, dict[str, object]]] = []
+
+    result = HarnessTaskAgent().run(
+        TaskRequirement(
+            task_frame_id="task-restored-command-retry",
+            kind="conversation",
+            goal="读取更新后的结果",
+            capability_manifest=CapabilityManifest(
+                available=[
+                    CapabilityDescriptor(
+                        capability_id="harness.read-file",
+                        name="read_file",
+                        kind="internal",
+                    )
+                ]
+            ),
+        ),
+        _model_config(),
+        lambda name, arguments: (
+            invoked.append((name, arguments))
+            or {"success": True, "data": {"content": "updated"}}
+        ),
+        max_actions=2,
+        checkpoint={
+            "task_frame_id": "task-restored-command-retry",
+            "step_id": "",
+            "non_retryable_action_signatures": [
+                harness_agent_module._action_signature(
+                    "read_file", {"path": "results/current.json"}
+                )
+            ],
+        },
+    )
+
+    assert result.status == "completed"
+    assert invoked == [("read_file", {"path": "results/current.json"})]
 
 
 def test_harness_agent_activates_described_capability_for_current_revision(
@@ -2529,14 +3646,14 @@ def test_harness_agent_projects_only_validated_current_turn_images(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("ULTRARAG_DATA_DIR", str(tmp_path / "data"))
-    data_url = "data:image/png;base64,aW1n"
+    data_url = "data:image/png;base64,iVBORw0KGgo="
     descriptors = materialize_task_attachments(
         [
             ChatAttachmentRead(
                 id="image-current-turn",
                 filename="screen.png",
                 content_type="image/png",
-                size=3,
+                size=8,
                 kind="image",
                 data_url=data_url,
             )
@@ -2571,7 +3688,7 @@ def test_harness_agent_projects_only_validated_current_turn_images(
                 id="image-current-turn",
                 filename="screen.png",
                 content_type="image/png",
-                size=3,
+                size=8,
                 kind="image",
                 data_url=data_url,
             )
@@ -2975,6 +4092,178 @@ def test_task_frame_store_persists_frames_and_projects_only_active_sop_work() ->
         ]
 
 
+def test_agent_loop_identity_is_durable_per_general_session_and_sop_frame() -> None:
+    engine = _test_engine()
+    with Session(engine) as db:
+        session = _chat_session()
+        general_one = HarnessTaskFrameRecord(
+            tenant_id=session.tenant_id,
+            session_id=session.id,
+            source_turn_id="turn-one",
+            task_id="general-one",
+            kind="conversation",
+        )
+        general_two = HarnessTaskFrameRecord(
+            tenant_id=session.tenant_id,
+            session_id=session.id,
+            source_turn_id="turn-two",
+            task_id="general-two",
+            kind="conversation",
+        )
+        sop_one = HarnessTaskFrameRecord(
+            tenant_id=session.tenant_id,
+            session_id=session.id,
+            source_turn_id="turn-one",
+            task_id="sop-one",
+            kind="sop",
+            skill_id="purchase",
+        )
+        sop_two = HarnessTaskFrameRecord(
+            tenant_id=session.tenant_id,
+            session_id=session.id,
+            source_turn_id="turn-two",
+            task_id="sop-two",
+            kind="sop",
+            skill_id="refund",
+        )
+        db.add_all([session, general_one, general_two, sop_one, sop_two])
+        db.commit()
+        store = TaskFrameStore(db)
+
+        general_loop_one = store.ensure_agent_loop(general_one)
+        general_loop_two = store.ensure_agent_loop(general_two)
+        sop_loop_one = store.ensure_agent_loop(sop_one)
+        sop_loop_two = store.ensure_agent_loop(sop_two)
+        db.commit()
+
+        assert general_loop_one.id == general_loop_two.id
+        assert sop_loop_one.id != sop_loop_two.id
+        assert sop_loop_one.id != general_loop_one.id
+        assert db.exec(select(HarnessAgentLoopRecord)).all()
+
+        sop_one.status = "queued"
+        db.add(sop_one)
+        db.commit()
+        store.mark_running(sop_one)
+        run = store.start_run(
+            sop_one,
+            requirement={"goal": "购买"},
+            capability_snapshot={"available": []},
+        )
+        store.update_run_context(
+            run,
+            requirement={"goal": "继续购买", "step_id": "confirm"},
+            capability_snapshot={"available": [{"name": "confirm_order"}]},
+        )
+        db.commit()
+        assert run.agent_loop_id == sop_loop_one.id
+        assert run.task_requirement_json["step_id"] == "confirm"
+        assert len(db.exec(select(HarnessRunRecord)).all()) == 1
+
+        store.finish_agent_loop_for_frame(
+            sop_one,
+            result_status="awaiting_user",
+            checkpoint={"task_frame_id": sop_one.task_id},
+            last_run_id=run.id,
+        )
+        db.commit()
+        db.refresh(sop_loop_one)
+        assert sop_loop_one.status == "suspended"
+
+        store.finish_agent_loop_for_frame(
+            sop_one,
+            result_status="completed",
+            checkpoint={"task_frame_id": sop_one.task_id},
+            last_run_id=run.id,
+        )
+        db.commit()
+        db.refresh(sop_loop_one)
+        assert sop_loop_one.status == "completed"
+
+
+def test_harness_agent_checkpoint_restores_transcript_across_activation(
+    monkeypatch,
+) -> None:
+    payloads: list[dict[str, object]] = []
+    actions = iter(
+        [
+            {
+                "action": "tool",
+                "tool_name": "read_file",
+                "arguments": {"path": "result.json"},
+            },
+            {
+                "action": "finish",
+                "status": "completed",
+                "reply_fragment": "已完成",
+            },
+            {
+                "action": "finish",
+                "status": "completed",
+                "reply_fragment": "新任务已完成",
+            },
+        ]
+    )
+
+    class FakeLLMClient:
+        def __init__(self, _model_config: ModelConfig):
+            pass
+
+        def generate_json(
+            self, _system_prompt: str, payload: dict[str, object]
+        ) -> dict[str, object]:
+            payloads.append(payload)
+            return next(actions)
+
+    monkeypatch.setattr(harness_agent_module, "LLMClient", FakeLLMClient)
+    requirement = TaskRequirement(
+        task_frame_id="task-checkpoint",
+        kind="conversation",
+        goal="读取结果",
+        capability_manifest=CapabilityManifest(
+            available=[
+                CapabilityDescriptor(
+                    capability_id="harness.read_file",
+                    name="read_file",
+                    kind="internal",
+                )
+            ]
+        ),
+    )
+    agent = HarnessTaskAgent()
+    first = agent.run(
+        requirement,
+        _model_config(),
+        lambda _name, _arguments: {"success": True, "data": {"value": 1}},
+        max_actions=1,
+    )
+    second = agent.run(
+        requirement,
+        _model_config(),
+        lambda _name, _arguments: {"success": True},
+        max_actions=1,
+        checkpoint=first.loop_checkpoint,
+    )
+    next_requirement = requirement.model_copy(
+        update={"task_frame_id": "task-checkpoint-next", "goal": "新任务"}
+    )
+    third = agent.run(
+        next_requirement,
+        _model_config(),
+        lambda _name, _arguments: {"success": True},
+        max_actions=1,
+        checkpoint=second.loop_checkpoint,
+    )
+
+    assert first.status == "action_budget"
+    assert second.status == "completed"
+    assert third.status == "completed"
+    assert len(payloads[1]["harness_transcript"]) == 2
+    assert payloads[1]["harness_transcript"][1]["tool_name"] == "read_file"
+    assert payloads[2]["harness_transcript"] == []
+    assert payloads[2]["agent_loop_memory"]["recent_task_summaries"] == ["已完成"]
+
+
 def test_turn_action_budget_defers_unstarted_frames_as_queued() -> None:
     engine = _test_engine()
     with Session(engine) as db:
@@ -3130,6 +4419,77 @@ def test_dependent_followup_stays_queued_then_releases_with_parent_result() -> N
 
         assert requirement.source_user_message == "退完帮我买一个 A3"
         assert requirement.prior_task_results[0]["task_frame_id"] == ("task-refund")
+
+
+def test_referenced_session_results_resolve_prior_capability_by_exact_slot_value() -> None:
+    engine = _test_engine()
+    with Session(engine) as db:
+        session = _chat_session()
+        db.add(session)
+        db.commit()
+        purchase_invocation = HarnessInvocationRecord(
+            tenant_id=session.tenant_id,
+            session_id=session.id,
+            task_id="task-purchase-a1",
+            run_id="run-purchase-a1",
+            call_id="call-purchase-a1",
+            tool_name="product.purchase",
+            request_digest="digest-purchase-a1",
+            status="completed",
+            arguments_json={"product_id": "a1", "quantity": 1},
+            result_json={"success": True, "data": {"order_id": "MOCK02063280C6"}},
+            response_cache_json={
+                "success": True,
+                "data": {
+                    "order_id": "MOCK02063280C6",
+                    "product_id": "A1",
+                    "display_name": "A1 标准商品",
+                    "unit_price": 129,
+                    "currency": "CNY",
+                },
+            },
+            finished_at=utc_now(),
+        )
+        current = HarnessTaskFrameRecord(
+            tenant_id=session.tenant_id,
+            session_id=session.id,
+            source_turn_id="turn-compare",
+            task_id="task-compare-a3",
+            kind="sop",
+            status="queued",
+            slots_json={
+                "order_id": "MOCK02063280C6",
+                "compare_product": "a3",
+                "preferred_name": "hm",
+            },
+        )
+        unrelated = HarnessInvocationRecord(
+            tenant_id=session.tenant_id,
+            session_id=session.id,
+            task_id="task-unrelated",
+            run_id="run-unrelated",
+            call_id="call-unrelated",
+            tool_name="weather.lookup",
+            request_digest="digest-unrelated",
+            status="completed",
+            response_cache_json={"success": True, "data": {"city": "Beijing"}},
+            finished_at=utc_now(),
+        )
+        db.add(purchase_invocation)
+        db.add(unrelated)
+        db.add(current)
+        db.commit()
+
+        projected = TaskFrameStore(db).referenced_session_results(current)
+
+        assert len(projected) == 1
+        assert projected[0]["task_frame_id"] == "task-purchase-a1"
+        assert projected[0]["reference_matches"] == ["MOCK02063280C6"]
+        assert projected[0]["reference_source"] == "session_invocation"
+        capability_result = projected[0]["capability_results"][0]
+        assert capability_result["tool_name"] == "product.purchase"
+        assert capability_result["result"]["data"]["product_id"] == "A1"
+        assert capability_result["result"]["data"]["unit_price"] == 129
 
 
 def test_ready_dependency_frames_repairs_legacy_dependency_block() -> None:
@@ -3520,3 +4880,61 @@ def _model_config() -> ModelConfig:
         api_key_encrypted="test",
         model="test-model",
     )
+
+
+def test_agent_loop_transcript_compacts_old_tool_payloads_but_keeps_skill_instructions() -> None:
+    transcript = [
+        {
+            "role": "tool",
+            "tool_name": "general_skill.weather",
+            "result": {"success": True, "data": {"package": "stale" * 600}},
+        },
+        {
+            "role": "tool",
+            "tool_name": "general_skill.weather",
+            "result": {"success": True, "data": {"package": "rules" * 600}},
+        },
+        {
+            "role": "assistant",
+            "action": "tool",
+            "tool_name": "read_file",
+            "arguments": {"path": "large.txt"},
+        },
+        {
+            "role": "tool",
+            "tool_name": "read_file",
+            "result": {
+                "success": True,
+                "data": {
+                    "path": "large.txt",
+                    "content": "x" * 20_000,
+                    "sha256": "abc",
+                    "next_offset": 20_000,
+                    "continuation_token": "next",
+                },
+            },
+        },
+        *(
+            {
+                "role": "assistant",
+                "action": "tool",
+                "tool_name": "file_info",
+                "arguments": {"path": f"file-{index}.txt"},
+            }
+            for index in range(7)
+        ),
+    ]
+
+    projected = _transcript_for_model(transcript, keep_recent_entries=3)
+
+    skill_entries = [
+        item
+        for item in projected
+        if item.get("tool_name") == "general_skill.weather"
+    ]
+    assert len(skill_entries) == 1
+    assert skill_entries[0]["result"]["data"]["package"].startswith("rules")
+    old_read = next(item for item in projected if item.get("tool_name") == "read_file" and item.get("role") == "tool")
+    assert "content" not in old_read["result"]["data"]
+    assert old_read["result"]["data"]["continuation_token"] == "next"
+    assert old_read["result"]["history_receipt"]["omitted_chars"] > 20_000
