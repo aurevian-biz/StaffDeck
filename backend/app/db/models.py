@@ -27,7 +27,10 @@ class Tenant(SQLModel, table=True):
 
 class User(SQLModel, table=True):
     __tablename__ = "users"
-    __table_args__ = (UniqueConstraint("tenant_id", "username", name="uq_user_tenant_username"),)
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "username", name="uq_user_tenant_username"),
+        Index("ix_users_tenant_id_display_name", "tenant_id", "display_name"),
+    )
 
     id: str = Field(default_factory=lambda: new_id("user"), primary_key=True)
     tenant_id: str = Field(index=True)
@@ -138,6 +141,9 @@ class APIJob(SQLModel, table=True):
     error_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     cancel_requested: bool = False
     retryable: bool = False
+    execution_owner: Optional[str] = Field(default=None, index=True)
+    execution_generation: int = 0
+    lease_expires_at: Optional[datetime] = Field(default=None, index=True)
     session_id: Optional[str] = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=utc_now)
     started_at: Optional[datetime] = None
@@ -158,6 +164,56 @@ class APIJobEvent(SQLModel, table=True):
     event_type: str = Field(index=True)
     data_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     public: bool = True
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class A2ATaskRun(SQLModel, table=True):
+    """Durable state for outbound A2A calls and locally served A2A tasks."""
+
+    __tablename__ = "a2a_task_runs"
+
+    id: str = Field(default_factory=lambda: new_id("a2arun"), primary_key=True)
+    direction: str = Field(default="client", index=True)
+    tenant_id: str = Field(index=True)
+    tool_id: Optional[str] = Field(default=None, index=True)
+    agent_id: Optional[str] = Field(default=None, index=True)
+    session_id: Optional[str] = Field(default=None, index=True)
+    invocation_id: Optional[str] = Field(default=None, index=True)
+    endpoint_url: str
+    agent_card_url: Optional[str] = None
+    protocol_binding: str = "JSONRPC"
+    protocol_version: str = "1.0"
+    remote_task_id: Optional[str] = Field(default=None, index=True)
+    context_id: Optional[str] = Field(default=None, index=True)
+    codex_session_id: Optional[str] = Field(default=None, index=True)
+    status: str = Field(default="submitted", index=True)
+    request_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    result_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    error_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    artifacts_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    agent_card_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    last_event_id: Optional[str] = Field(default=None, index=True)
+    cancel_requested: bool = False
+    recovery_attempts: int = 0
+    created_at: datetime = Field(default_factory=utc_now)
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class A2ATaskEvent(SQLModel, table=True):
+    __tablename__ = "a2a_task_events"
+    __table_args__ = (
+        UniqueConstraint("run_id", "sequence", name="uq_a2a_task_event_sequence"),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("a2aevt"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    run_id: str = Field(index=True)
+    sequence: int = Field(index=True)
+    external_event_id: Optional[str] = Field(default=None, index=True)
+    event_type: str = Field(index=True)
+    data_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=utc_now)
 
 
@@ -189,6 +245,8 @@ class WebhookDelivery(SQLModel, table=True):
     event_type: str = Field(index=True)
     payload_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     status: str = Field(default="queued", index=True)
+    delivery_owner: Optional[str] = Field(default=None, index=True)
+    lease_expires_at: Optional[datetime] = Field(default=None, index=True)
     attempt_count: int = 0
     next_attempt_at: Optional[datetime] = Field(default=None, index=True)
     last_status_code: Optional[int] = None
@@ -818,6 +876,28 @@ class ChannelBindingAgent(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class ChannelBindingManager(SQLModel, table=True):
+    """渠道绑定协作者:创建者/admin 显式授权的非创建者,可凭证/挂载/启停但不能删除。
+
+    同一 (binding, user) 仅一行;移除即软撤销(revoked_at),重新添加复活该行,
+    保留最近一次授权/撤销记录用于审计。删除渠道绑定级联清空协作者行。
+    """
+
+    __tablename__ = "channel_binding_managers"
+    __table_args__ = (
+        UniqueConstraint("binding_id", "user_id", name="uq_channel_binding_manager"),
+        Index("ix_channel_binding_managers_tenant_user", "tenant_id", "user_id"),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("chbm"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    binding_id: str = Field(index=True)
+    user_id: str = Field(index=True)
+    granted_by_user_id: str
+    granted_at: datetime = Field(default_factory=utc_now)
+    revoked_at: Optional[datetime] = None
+
+
 class ChannelConvState(SQLModel, table=True):
     """路由指针：每个 (binding, external_conv_id) 会话的当前员工。"""
 
@@ -831,6 +911,11 @@ class ChannelConvState(SQLModel, table=True):
     binding_id: str = Field(index=True)
     external_conv_id: str
     current_agent_id: str
+    # 路由指针版本；自动路由分类完成后必须以此做 CAS，避免覆盖期间的手动切换。
+    routing_revision: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default="0"),
+    )
     # 手动 /切换 后的保护窗:此时间之前跳过智能自动分发
     manual_pin_until: Optional[datetime] = None
     created_at: datetime = Field(default_factory=utc_now)
@@ -920,6 +1005,7 @@ class ChannelInboundEvent(SQLModel, table=True):
     status: str = Field(default="received", index=True)
     # 创建/接管该事件的进程启动代次；当前代次仍在运行时禁止按墙钟误接管。
     processor_run_id: Optional[str] = Field(default=None, index=True)
+    processor_lease_expires_at: Optional[datetime] = Field(default=None, index=True)
     error: Optional[str] = None
     processed_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=utc_now)
@@ -953,6 +1039,12 @@ class ChannelDelivery(SQLModel, table=True):
     next_attempt_at: Optional[datetime] = Field(default=None, index=True)
     # 原子 claim 的抢占时间(守护据此重置卡死投递)
     sending_since: Optional[datetime] = None
+    # 每次领取投递都会生成新的 owner 并递增 generation；旧 worker 的迟到结果不得落库。
+    delivery_owner: Optional[str] = Field(default=None, index=True)
+    delivery_generation: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default="0"),
+    )
     last_error: Optional[str] = None
     # 回复类投递 = message_id，天然幂等
     idempotency_key: str = Field(unique=True, index=True)
@@ -983,6 +1075,9 @@ class HumanHandoffRequest(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
     answered_at: Optional[datetime] = None
+    # 飞书 handoff_notice 投递成功后回写的飞书 message_id;阶段 4 据此关联处理人回复。
+    # 网页触发的 handoff 无此字段(为空),不影响现有网页回复链路。
+    notify_message_id: Optional[str] = Field(default=None, index=True)
 
 
 class ScheduledTask(SQLModel, table=True):
@@ -1039,6 +1134,33 @@ class ScheduledTaskRun(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class HarnessAgentLoopRecord(SQLModel, table=True):
+    """Durable logical AgentLoop shared across Harness activations."""
+
+    __tablename__ = "harness_agent_loops"
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id", "loop_key", name="uq_harness_agent_loop_session_key"
+        ),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("hloop"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    session_id: str = Field(index=True)
+    loop_key: str = Field(index=True)
+    kind: str = Field(default="general", index=True)
+    status: str = Field(default="active", index=True)
+    owner_task_frame_record_id: Optional[str] = Field(default=None, index=True)
+    skill_id: Optional[str] = Field(default=None, index=True)
+    workspace_scope_id: Optional[str] = Field(default=None, index=True)
+    checkpoint_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    last_run_id: Optional[str] = Field(default=None, index=True)
+    state_version: int = 1
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    finished_at: Optional[datetime] = None
+
+
 class HarnessTaskFrameRecord(SQLModel, table=True):
     """Durable TaskFrame state for the isolated Harness v2 execution path."""
 
@@ -1054,6 +1176,7 @@ class HarnessTaskFrameRecord(SQLModel, table=True):
     session_id: str = Field(index=True)
     source_turn_id: str = Field(index=True)
     task_id: str = Field(index=True)
+    agent_loop_id: Optional[str] = Field(default=None, index=True)
     kind: str = Field(default="conversation", index=True)
     decision: str = Field(default="answer_only", index=True)
     status: str = Field(default="queued", index=True)
@@ -1084,6 +1207,7 @@ class HarnessRunRecord(SQLModel, table=True):
     tenant_id: str = Field(index=True)
     session_id: str = Field(index=True)
     task_frame_record_id: str = Field(index=True)
+    agent_loop_id: Optional[str] = Field(default=None, index=True)
     task_id: str = Field(index=True)
     source_turn_id: str = Field(index=True)
     status: str = Field(default="running", index=True)
@@ -1247,6 +1371,39 @@ class SkillFeedback(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class EvolutionProposal(SQLModel, table=True):
+    __tablename__ = "evolution_proposals"
+
+    id: str = Field(default_factory=lambda: new_id("evo"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    agent_id: str = Field(index=True)
+    resource_type: str = Field(index=True)
+    resource_id: str = Field(index=True)
+    resource_key: str = Field(index=True)
+    resource_name: str
+    base_version: Optional[str] = Field(default=None, index=True)
+    status: str = Field(default="ready_for_review", index=True)
+    trigger_type: str = Field(default="feedback", index=True)
+    risk_level: str = Field(default="medium", index=True)
+    hypothesis: str = ""
+    rationale: str = ""
+    expected_outcome: str = ""
+    source_feedback_ids_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    evidence_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    candidate_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    diff_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    evaluation_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    published_snapshot_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    error: Optional[str] = None
+    created_by_user_id: str = Field(index=True)
+    reviewed_by_user_id: Optional[str] = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    reviewed_at: Optional[datetime] = None
+    published_at: Optional[datetime] = None
+    rolled_back_at: Optional[datetime] = None
+
+
 class AgentEvent(SQLModel, table=True):
     __tablename__ = "agent_events"
 
@@ -1304,8 +1461,36 @@ class TeamMember(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class TeamRun(SQLModel, table=True):
+    """One durable TL plan from delegation through final team synthesis."""
+
+    __tablename__ = "team_runs"
+    __table_args__ = (
+        UniqueConstraint(
+            "tl_session_id",
+            "source_turn_id",
+            name="uq_team_run_tl_session_source_turn",
+        ),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("team_run"), primary_key=True)
+    team_id: str = Field(index=True)
+    tenant_id: str = Field(index=True)
+    tl_session_id: str = Field(index=True)
+    source_turn_id: str = Field(index=True)
+    created_by_user_id: Optional[str] = Field(default=None, index=True)
+    # planning -> running/awaiting_input -> synthesizing -> completed/failed
+    status: str = Field(default="planning", index=True)
+    synthesis_session_id: Optional[str] = Field(default=None, index=True)
+    final_message_id: Optional[str] = Field(default=None, index=True)
+    error: Optional[str] = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    completed_at: Optional[datetime] = None
+
+
 class TeamTask(SQLModel, table=True):
-    """团队任务:pending -> in_progress -> review -> done/rework/escalated;
+    """团队任务:blocked -> pending -> in_progress -> review -> done/rework/escalated;
 
     rework -> in_progress 重入;pending -> bidding -> pending 为任务池竞标链路。
     """
@@ -1315,6 +1500,8 @@ class TeamTask(SQLModel, table=True):
     id: str = Field(default_factory=lambda: new_id("team_task"), primary_key=True)
     team_id: str = Field(index=True)
     tenant_id: str = Field(index=True)
+    team_run_id: Optional[str] = Field(default=None, index=True)
+    source_turn_id: Optional[str] = Field(default=None, index=True)
     parent_task_id: Optional[str] = Field(default=None, index=True)
     title: str
     description: Optional[str] = None
@@ -1324,6 +1511,8 @@ class TeamTask(SQLModel, table=True):
     created_by_tl: bool = False
     assignee_agent_id: Optional[str] = Field(default=None, index=True)
     session_id: Optional[str] = Field(default=None, index=True)
+    depends_on_task_ids_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    activation_condition_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     report_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     review_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     # 乐观锁版本号,人改判/验收并发时防覆盖

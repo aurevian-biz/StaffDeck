@@ -11,6 +11,9 @@ export type SkillCapabilityRefs = {
 
 export type SkillGraphNode = Record<string, unknown> & {
   capability_refs?: SkillCapabilityRefs;
+  sub_sop_id?: string | null;
+  /** 人工节点指定处理人（handoff / handoff_human 节点）。 */
+  assignee_user_id?: string | null;
 };
 
 export type SkillCard = {
@@ -19,6 +22,7 @@ export type SkillCard = {
   version: string;
   business_domain?: string;
   description: string;
+  capability_scope?: CapabilityScope;
   step_timeout_seconds?: number | null;
   trigger_intents: string[];
   user_utterance_examples: string[];
@@ -391,7 +395,7 @@ export type ToolRead = {
   description?: string;
   capability_scope?: CapabilityScope;
   bucket: string;
-  tool_type: 'http' | 'mcp' | string;
+  tool_type: 'http' | 'a2a' | 'mcp' | string;
   method: string;
   url: string;
   headers: Record<string, unknown>;
@@ -408,6 +412,43 @@ export type ToolRead = {
   metadata?: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+};
+
+export type A2ATaskEventRead = {
+  sequence: number;
+  event_type: string;
+  data: Record<string, unknown>;
+  created_at: string;
+};
+
+export type A2ATaskRunRead = {
+  id: string;
+  direction: string;
+  remote_task_id?: string | null;
+  context_id?: string | null;
+  codex_session_id?: string | null;
+  status: string;
+  endpoint_url: string;
+  protocol_version: string;
+  cancel_requested: boolean;
+  recovery_attempts: number;
+  artifacts: Record<string, unknown>[];
+  error: Record<string, unknown>;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  updated_at: string;
+  events: A2ATaskEventRead[];
+};
+
+export type CodexA2AAdapterRead = {
+  enabled: boolean;
+  endpoint_url: string;
+  agent_card_url: string;
+  command: string;
+  workspace_root: string;
+  timeout_seconds: number;
+  token_configured: boolean;
 };
 
 export type MCPTransport = 'stdio' | 'streamable_http' | 'sse' | 'builtin';
@@ -759,6 +800,9 @@ export type TraceLineRead = {
   collapsible?: boolean | null;
   duration_ms?: number | null;
   model_duration_ms?: number | null;
+  model_call_count?: number | null;
+  model_names?: string[] | null;
+  depth?: number | null;
 };
 
 export type TurnTraceRead = {
@@ -770,6 +814,7 @@ export type TurnTraceRead = {
   duration_ms?: number | null;
   model_duration_ms?: number | null;
   model_call_count?: number | null;
+  model_names?: string[] | null;
 };
 
 export type TraceSummary = {
@@ -933,6 +978,12 @@ export type ChannelBindingRead = {
   team_id?: string | null;
   team_name?: string | null;
   auto_route?: boolean;
+  /** 渠道默认人工处理人（SOP 节点未指定 assignee 时回退到此值）。 */
+  default_handoff_assignee_user_id?: string | null;
+  default_handoff_assignee_name?: string | null;
+  identity_scope_key?: string | null;
+  /** 当前请求者对该绑定的管理角色:admin/owner/collaborator;无关系时为 null */
+  my_role?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -945,6 +996,14 @@ export type ChannelBatchJobRead = {
   succeeded?: number;
   failed?: number;
   errors?: string[];
+};
+
+export type ChannelBindingManagerRead = {
+  user_id: string;
+  name?: string | null;
+  granted_at: string;
+  granted_by_user_id?: string | null;
+  granted_by_name?: string | null;
 };
 
 export type ChannelDeliveryRead = {
@@ -971,12 +1030,12 @@ export type ChannelConversationRead = {
   updated_at: string;
 };
 
-export type ChannelConversationAttachmentRead = {
-  id?: string;
-  filename?: string;
-  content_type?: string;
-  size?: number;
-  kind?: string;
+export type ChannelConversationAttachment = {
+  id: string;
+  filename: string;
+  content_type: string;
+  size: number;
+  kind: 'text' | 'pdf' | 'image' | 'binary';
 };
 
 export type ChannelConversationMessageRead = {
@@ -984,7 +1043,7 @@ export type ChannelConversationMessageRead = {
   role: string;
   content: string;
   created_at: string;
-  attachments?: ChannelConversationAttachmentRead[];
+  attachments?: ChannelConversationAttachment[] | null;
 };
 
 export type ChannelBindCodeRead = {
@@ -1094,6 +1153,8 @@ export type TeamConversationMessageRead = {
   id: string;
   role: string;
   content: string;
+  metadata?: ChatMessage['metadata'];
+  turn_id?: string | null;
   created_at: string;
 };
 
@@ -1132,12 +1193,15 @@ export type TeamTaskRead = {
   id: string;
   team_id: string;
   tenant_id: string;
+  team_run_id?: string | null;
+  source_turn_id?: string | null;
   parent_task_id?: string | null;
   title: string;
   description?: string | null;
   priority: string;
   status:
     | 'bidding'
+    | 'blocked'
     | 'pending'
     | 'in_progress'
     | 'review'
@@ -1149,6 +1213,8 @@ export type TeamTaskRead = {
   created_by_tl: boolean;
   assignee_agent_id?: string | null;
   session_id?: string | null;
+  depends_on_task_ids?: string[];
+  activation_condition?: Record<string, unknown>;
   report: Record<string, unknown>;
   review: Record<string, unknown>;
   version?: number;

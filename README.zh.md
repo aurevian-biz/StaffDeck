@@ -22,8 +22,10 @@
 
 
 ## 更新日志
-
-  - **2026-07-15**：StaffDeck正式开源！欢迎大家使用反馈与Star支持。
+- **2026-08-18**: 我们推出v0.4.0，引入多员工智能协作与更快的调用链路。
+- **2026-08-06**: 我们推出v0.3.0，提供了更方便的SOP编辑与运行时沙箱。
+- **2026-08-03**: 我们推出v0.2.0，提供更好的harness系统和IM渠道支持。
+- **2026-07-15**：StaffDeck正式开源！欢迎大家使用反馈与Star支持。
 
 # 💡 关于StaffDeck
 
@@ -306,9 +308,10 @@ StaffDeck/
 
 # 💬 联系我们
 - 关于技术问题及功能请求，请提交 [GitHub Issues](https://github.com/OpenBMB/StaffDeck/issues)。
-- 商业合作，请联系：
+- 商业授权请填写[飞书问卷](https://modelbest.feishu.cn/share/base/form/shrcnLAF6EpCi8lXhTS3VYnWc4g)
+- 为了商业合作，请联系：
   ```
-  business@modelbest.cn
+  agentverse@modelbest.cn
   ```
 - 欢迎加入我们的社区与我们交流：
 

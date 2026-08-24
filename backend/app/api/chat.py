@@ -14,30 +14,30 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, or_, update
 from sqlmodel import Session, select
 from starlette.background import BackgroundTask
 
 from app.agents.branching import model_for_agent, visible_published_skills
 from app.channels.service_outbox import stage_channel_delivery, stage_user_message_mirror
 from app.core import AgentLoop
-from app.core.cancellation import cancel_chat_turn
+from app.core.cancellation import cancel_chat_turn, is_chat_turn_cancelled
 from app.core.capability_manifest import CapabilityManifestBuilder
 from app.core.harness_session_cleanup import (
     harness_task_workspace_path,
     remove_harness_session_workspace,
     stage_harness_session_record_deletion,
 )
+from app.core.harness_turn_store import HarnessTurnStore
 from app.core.slash_commands import SlashCommandRead, slash_command_catalog
 from app.db import engine, get_session
 from app.db.models import (
     AgentEvent,
     AgentProfile,
     ChatSession,
+    HarnessTurnRecord,
     HarnessTaskFrameRecord,
     HumanHandoffRequest,
-    KnowledgeChunk,
-    KnowledgeConcept,
     Message,
     MessageFeedback,
     ScheduledTaskRun,
@@ -54,7 +54,6 @@ from app.harness import (
     normalize_harness_artifact_path,
     open_harness_artifact,
 )
-from app.knowledge.citations import CITATION_EXCERPT_CHAR_LIMIT, compact_knowledge_citation_labels
 from app.llm import LLMClient, LLMError
 from app.observability.spans import (
     bind_span_sink,
@@ -77,6 +76,7 @@ from app.session.message_visibility import (
     visible_message_content,
     visible_message_rows,
 )
+from app.session.message_read import message_read
 from app.session.origin import pilotdeck_origin_session_ids
 from app.session.session_schema import (
     ChatAttachmentRead,
@@ -88,6 +88,7 @@ from app.session.session_schema import (
     MessageFeedbackRequest,
     MessageRead,
 )
+from app.skills.nesting import discoverable_sops
 from app.teams.service import get_team_leader
 from app.teams.wakeup import build_tl_chat_context, process_tl_reply
 
@@ -203,92 +204,6 @@ def session_read(
         created_at=row.created_at.isoformat(),
         updated_at=row.updated_at.isoformat(),
     )
-
-
-def message_read(
-    row: Message,
-    feedback_rating: str | None = None,
-    turn_id: str | None = None,
-    db: Session | None = None,
-    content_override: str | None = None,
-) -> MessageRead:
-    metadata = _message_metadata_read(row, db)
-    content = row.content if content_override is None else content_override
-    if row.role == "assistant":
-        content, compacted_citations = compact_knowledge_citation_labels(
-            content,
-            metadata.get("knowledge_citations"),
-        )
-        metadata = dict(metadata)
-        if compacted_citations:
-            metadata["knowledge_citations"] = compacted_citations
-        else:
-            metadata.pop("knowledge_citations", None)
-            metadata.pop("knowledge_query", None)
-    metadata_turn_id = str(metadata.get("turn_id") or metadata.get("user_message_id") or "").strip()
-    return MessageRead(
-        id=row.id,
-        tenant_id=row.tenant_id,
-        session_id=row.session_id,
-        role=row.role,
-        content=content,
-        metadata=metadata,
-        turn_id=turn_id or metadata_turn_id or None,
-        created_at=row.created_at.isoformat(),
-        feedback_rating=feedback_rating,
-    )
-
-
-def _message_metadata_read(row: Message, db: Session | None = None) -> dict:
-    metadata = dict(row.metadata_json or {})
-    if db is None:
-        return metadata
-    citations = metadata.get("knowledge_citations")
-    if not isinstance(citations, list) or not citations:
-        return metadata
-    hydrated: list[object] = []
-    changed = False
-    for citation in citations:
-        if not isinstance(citation, dict):
-            hydrated.append(citation)
-            continue
-        content = _citation_content_from_db(db, row.tenant_id, citation)
-        if content:
-            next_citation = dict(citation)
-            next_citation["content"] = content[:CITATION_EXCERPT_CHAR_LIMIT]
-            next_citation["excerpt"] = content[:CITATION_EXCERPT_CHAR_LIMIT]
-            hydrated.append(next_citation)
-            changed = True
-        else:
-            hydrated.append(citation)
-    if changed:
-        metadata["knowledge_citations"] = hydrated
-    return metadata
-
-
-def _citation_content_from_db(db: Session, tenant_id: str, citation: dict) -> str:
-    concept_id = str(citation.get("concept_id") or "").strip()
-    if concept_id:
-        concept = db.exec(
-            select(KnowledgeConcept).where(
-                KnowledgeConcept.tenant_id == tenant_id,
-                or_(KnowledgeConcept.concept_id == concept_id, KnowledgeConcept.id == concept_id),
-            )
-        ).first()
-        if concept:
-            content = _strip_okf_frontmatter(concept.content_md or "")
-            if content:
-                return content
-    chunk_id = str(citation.get("chunk_id") or "").strip()
-    if chunk_id:
-        chunk = db.get(KnowledgeChunk, chunk_id)
-        if chunk and chunk.tenant_id == tenant_id and chunk.content:
-            return chunk.content
-    return ""
-
-
-def _strip_okf_frontmatter(value: str) -> str:
-    return re.sub(r"^---[\s\S]*?---\s*", "", value or "", count=1).strip()
 
 
 def human_handoff_read(row: HumanHandoffRequest) -> HumanHandoffRead:
@@ -539,6 +454,60 @@ def _normalized_session_event_payload(row: AgentEvent) -> dict[str, object]:
     return normalized
 
 
+def _apply_handoff_reply(
+    db: Session,
+    row: HumanHandoffRequest,
+    reply: str,
+    *,
+    answered_by_user_id: str | None,
+    source: str = "web",
+) -> None:
+    """把一条 pending handoff 置为 answered 并触发 SOP 恢复。
+
+    供网页 API(reply_human_handoff)与飞书 intake 回复分支复用。
+    调用前需已完成权限校验与状态校验;本函数负责落库 + 事件 + 异步恢复。
+    source: "web" 或 "feishu",由调用方显式指定(不再靠 user_id 前缀推断)。
+    """
+    now = utc_now()
+    row.status = "answered"
+    row.human_reply = reply
+    row.answered_at = now
+    row.updated_at = now
+    row.resume_payload_json = {
+        **(row.resume_payload_json or {}),
+        "answered_by_user_id": answered_by_user_id,
+    }
+    db.add(row)
+
+    chat_session = db.get(ChatSession, row.session_id)
+    if chat_session and chat_session.tenant_id == row.tenant_id:
+        chat_session.status = "active"
+        chat_session.awaiting_input_json = None
+        chat_session.summary = f"最近回复：{reply[:120]}"
+        chat_session.updated_at = now
+        db.add(chat_session)
+    db.add(
+        AgentEvent(
+            tenant_id=row.tenant_id,
+            session_id=row.session_id,
+            event_type="human_handoff_answered",
+            payload_json={
+                "handoff_id": row.id,
+                "agent_id": row.agent_id,
+                "trigger_skill_id": row.trigger_skill_id,
+                "trigger_step_id": row.trigger_step_id,
+                "answered_by_user_id": answered_by_user_id,
+                "reply_preview": reply[:180],
+                "source": source,
+            },
+            created_at=now,
+        )
+    )
+    db.commit()
+    db.refresh(row)
+    _resume_human_handoff_async(row.id)
+
+
 def _resume_human_handoff_async(handoff_id: str) -> None:
     thread = threading.Thread(target=_resume_human_handoff_worker, args=(handoff_id,), daemon=True)
     thread.start()
@@ -586,11 +555,9 @@ def _resume_human_handoff_worker(handoff_id: str) -> None:
                 debug=False,
             )
             AgentLoop(db).handle_turn(request)
-            metadata = dict(handoff.metadata_json or {})
-            metadata["resume_finished_at"] = utc_now().isoformat()
-            handoff.metadata_json = metadata
-            db.add(handoff)
-            db.commit()
+            # resume turn 完成后不再写 resume_finished_at 标记:
+            # _inject_handoff_context 已改为用 request.channel == "human_handoff_resume"
+            # 判定 resume turn,时序可靠,无需事后标记。
     except Exception as exc:
         with Session(engine) as db:
             handoff = db.get(HumanHandoffRequest, handoff_id)
@@ -621,6 +588,15 @@ def _maybe_handle_scheduled_task_request(
 ) -> tuple[ChatTurnResponse, ScheduledTaskDraftRead] | None:
     if request.interaction_mode != "scheduled_task" or not request.agent_id:
         return None
+    if request.client_turn_id and is_chat_turn_cancelled(
+        chat_session.id,
+        request.client_turn_id,
+        db=db,
+        identity_kind="client",
+    ):
+        # Cancellation wins over the shortcut. Let the normal Harness path
+        # claim and terminalize the logical turn instead of creating a draft.
+        return None
     draft = detect_scheduled_task_draft(
         db,
         request.tenant_id,
@@ -632,6 +608,11 @@ def _maybe_handle_scheduled_task_request(
     )
     if not draft or not draft.should_create:
         return None
+
+    turn_store = HarnessTurnStore(db)
+    turn_claim = turn_store.claim(chat_session, request)
+    if turn_claim.replay is not None:
+        return turn_claim.replay, draft
 
     reply = _scheduled_task_draft_reply(draft)
     now = utc_now()
@@ -654,6 +635,8 @@ def _maybe_handle_scheduled_task_request(
     db.add(user_message)
     if request.channel == "web":
         stage_user_message_mirror(db, chat_session, user_message, web_origin=True)
+    db.flush()
+    turn_store.bind_user_message(turn_claim.record, user_message.id)
     draft_payload = draft.model_dump(mode="json")
     db.add(
         AgentEvent(
@@ -747,13 +730,13 @@ def _maybe_handle_scheduled_task_request(
             created_at=state_time,
         )
     )
-    db.commit()
-    db.refresh(chat_session)
     response = ChatTurnResponse(
         reply=reply,
         session_id=chat_session.id,
         session_state=public_session(chat_session),
     )
+    turn_store.complete(turn_claim.record, response)
+    db.refresh(chat_session)
     return response, draft
 
 
@@ -944,7 +927,7 @@ def list_slash_commands(
         agent_id,
         current_user,
     )
-    skills = visible_published_skills(db, tenant_id, agent.id)
+    skills = discoverable_sops(visible_published_skills(db, tenant_id, agent.id))
     manifest = CapabilityManifestBuilder(db).build(
         tenant_id,
         agent.id,
@@ -1463,9 +1446,19 @@ def cancel_chat_turn_endpoint(
 ) -> dict[str, bool]:
     _ensure_request_tenant(request.tenant_id, current_user)
     chat_session = _ensure_chat_session_available(db, request.tenant_id, current_user.id, session_id)
-    cancel_chat_turn(session_id, request.turn_id)
-    _persist_chat_turn_cancelled(db, request.tenant_id, chat_session, request.turn_id, current_user.id)
+    persisted = _persist_chat_turn_cancelled(
+        db,
+        request.tenant_id,
+        chat_session,
+        request.turn_id,
+        current_user.id,
+    )
     db.commit()
+    # Publish the process-local fast path only after the durable cancellation
+    # event commits. A failed commit must not change the outcome of a retry in
+    # this process compared with a fresh worker.
+    if persisted:
+        cancel_chat_turn(session_id, request.turn_id)
     return {"ok": True}
 
 
@@ -1519,6 +1512,13 @@ def _persist_chat_turn_cancelled(
         if not matches_message and not matches_client_turn:
             continue
         if event.event_type == "stream_cancelled":
+            _cancel_harness_turn_receipt(
+                db,
+                tenant_id,
+                chat_session.id,
+                message_id,
+                client_turn_id,
+            )
             return _ensure_cancelled_assistant_message(
                 db,
                 tenant_id,
@@ -1530,6 +1530,17 @@ def _persist_chat_turn_cancelled(
         return False
 
     now = utc_now()
+    receipt_cancelled = _cancel_harness_turn_receipt(
+        db,
+        tenant_id,
+        chat_session.id,
+        message_id,
+        client_turn_id,
+    )
+    if receipt_cancelled is False:
+        # Normal completion already owns the terminal receipt. Do not append a
+        # contradictory cancellation event/message after that linearization.
+        return False
     db.add(
         AgentEvent(
             tenant_id=tenant_id,
@@ -1558,6 +1569,60 @@ def _persist_chat_turn_cancelled(
     chat_session.updated_at = now
     db.add(chat_session)
     return True
+
+
+def _cancel_harness_turn_receipt(
+    db: Session,
+    tenant_id: str,
+    session_id: str,
+    user_message_id: str,
+    client_turn_id: str,
+) -> bool | None:
+    """Fence the worker in the same transaction as the cancellation event."""
+
+    identities = {value for value in (user_message_id, client_turn_id) if value}
+    if not identities:
+        return None
+    matching = db.exec(
+        select(HarnessTurnRecord).where(
+            HarnessTurnRecord.tenant_id == tenant_id,
+            HarnessTurnRecord.session_id == session_id,
+            (
+                HarnessTurnRecord.client_turn_id.in_(identities)
+                | HarnessTurnRecord.user_message_id.in_(identities)
+            ),
+        )
+    ).first()
+    if matching is None:
+        return None
+    if matching.status == "cancelled":
+        return True
+    if matching.status != "started":
+        return False
+    now = utc_now()
+    result = db.exec(
+        update(HarnessTurnRecord)
+        .where(
+            HarnessTurnRecord.tenant_id == tenant_id,
+            HarnessTurnRecord.session_id == session_id,
+            HarnessTurnRecord.status == "started",
+            (
+                HarnessTurnRecord.client_turn_id.in_(identities)
+                | HarnessTurnRecord.user_message_id.in_(identities)
+            ),
+        )
+        .values(
+            status="cancelled",
+            error_json={
+                "code": "CANCELLED",
+                "message": "用户取消了当前 Harness 执行。",
+            },
+            finished_at=now,
+            updated_at=now,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    return getattr(result, "rowcount", 0) == 1
 
 
 def _ensure_cancelled_assistant_message(
@@ -1919,6 +1984,10 @@ def list_chat_sessions(
             select(ChatSession)
             .where(
                 ChatSession.tenant_id == tenant_id,
+                or_(
+                    ChatSession.channel.is_(None),
+                    ChatSession.channel != "skill_test",
+                ),
                 or_(
                     and_(
                         ChatSession.user_id == current_user.id,
@@ -2297,38 +2366,9 @@ def reply_human_handoff(
     if not chat_session or chat_session.tenant_id != request.tenant_id:
         raise HTTPException(status_code=409, detail="Original handoff session is not available")
 
-    now = utc_now()
-    row.status = "answered"
-    row.human_reply = reply
-    row.answered_at = now
-    row.updated_at = now
-    row.resume_payload_json = {**(row.resume_payload_json or {}), "answered_by_user_id": current_user.id}
-    db.add(row)
-
-    chat_session.status = "active"
-    chat_session.awaiting_input_json = None
-    chat_session.summary = f"最近回复：{reply[:120]}"
-    chat_session.updated_at = now
-    db.add(chat_session)
-    db.add(
-        AgentEvent(
-            tenant_id=request.tenant_id,
-            session_id=row.session_id,
-            event_type="human_handoff_answered",
-            payload_json={
-                "handoff_id": row.id,
-                "agent_id": row.agent_id,
-                "trigger_skill_id": row.trigger_skill_id,
-                "trigger_step_id": row.trigger_step_id,
-                "answered_by_user_id": current_user.id,
-                "reply_preview": reply[:180],
-            },
-            created_at=now,
-        )
+    _apply_handoff_reply(
+        db, row, reply, answered_by_user_id=current_user.id, source="web"
     )
-    db.commit()
-    db.refresh(row)
-    _resume_human_handoff_async(row.id)
     return human_handoff_read(row)
 
 
@@ -3032,6 +3072,7 @@ def _harness_event_trace_line(event: AgentEvent) -> dict | None:
 
     if event_type == "task_frame_started":
         kind = str(payload.get("kind") or "conversation").strip()
+        skill_name = str(payload.get("skill_name") or payload.get("skill_id") or "").strip()
         step_id = str(payload.get("step_id") or "").strip()
         detail_parts = [
             "SOP TaskFrame" if kind == "sop" else "对话 TaskFrame",
@@ -3050,24 +3091,37 @@ def _harness_event_trace_line(event: AgentEvent) -> dict | None:
         return {
             "id": f"harness_frame_{frame_id}",
             "kind": "skill" if kind == "sop" else "decision",
-            "text": "开始执行任务",
+            "text": f"开始SOP {skill_name}" if kind == "sop" and skill_name else "开始执行任务",
             "detail": " · ".join(part for part in detail_parts if part) or None,
             "state": "running",
         }
     if event_type == "task_frame_finished":
+        kind = str(payload.get("kind") or "conversation").strip()
+        skill_name = str(payload.get("skill_name") or payload.get("skill_id") or "").strip()
+        step_id = str(payload.get("step_id") or "").strip()
         status = str(payload.get("status") or "completed").strip()
         action_count = payload.get("action_count")
         failed = status in {"failed", "blocked", "cancelled"}
         detail_parts = [
             f"状态 {status}",
+            f"步骤 {step_id}" if step_id else "",
             f"执行 {action_count} 个动作" if isinstance(action_count, int) else "",
         ]
+        if kind == "sop" and skill_name:
+            if failed:
+                text = f"SOP执行失败 {skill_name}"
+            elif status == "awaiting_user":
+                text = f"等待用户补充 {skill_name}"
+            else:
+                text = f"SOP任务执行完成 {skill_name}"
+        else:
+            text = "任务执行失败" if failed else "任务执行完成"
         return {
             "id": f"harness_frame_{frame_id}",
-            "kind": "decision",
-            "text": "任务执行失败" if failed else "任务执行完成",
+            "kind": "skill" if kind == "sop" else "decision",
+            "text": text,
             "detail": " · ".join(part for part in detail_parts if part) or None,
-            "state": "failed" if failed else "completed",
+            "state": "failed" if failed else ("running" if status == "awaiting_user" else "completed"),
         }
     if event_type == "harness_action_created":
         action = str(payload.get("action") or "").strip()

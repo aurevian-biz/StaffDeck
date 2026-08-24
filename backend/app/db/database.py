@@ -102,12 +102,48 @@ def _migrate_sqlite_skill_schema() -> None:
         _migrate_harness_v2_schema(conn, inspector, tables)
         _migrate_channel_envelope_v2_schema(conn, tables)
 
+        if "api_jobs" in tables:
+            job_columns = {column["name"] for column in inspector.get_columns("api_jobs")}
+            api_job_columns = {
+                "execution_owner": "ALTER TABLE api_jobs ADD COLUMN execution_owner VARCHAR",
+                "execution_generation": (
+                    "ALTER TABLE api_jobs ADD COLUMN execution_generation INTEGER NOT NULL DEFAULT 0"
+                ),
+                "lease_expires_at": "ALTER TABLE api_jobs ADD COLUMN lease_expires_at DATETIME",
+            }
+            for column_name, ddl in api_job_columns.items():
+                if column_name not in job_columns:
+                    conn.execute(text(ddl))
+
+        if "webhook_deliveries" in tables:
+            webhook_columns = {
+                column["name"] for column in inspector.get_columns("webhook_deliveries")
+            }
+            webhook_delivery_columns = {
+                "delivery_owner": (
+                    "ALTER TABLE webhook_deliveries ADD COLUMN delivery_owner VARCHAR"
+                ),
+                "lease_expires_at": (
+                    "ALTER TABLE webhook_deliveries ADD COLUMN lease_expires_at DATETIME"
+                ),
+            }
+            for column_name, ddl in webhook_delivery_columns.items():
+                if column_name not in webhook_columns:
+                    conn.execute(text(ddl))
+
         if "users" in tables:
             user_columns = {column["name"] for column in inspector.get_columns("users")}
             if "role" not in user_columns:
                 conn.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR NOT NULL DEFAULT 'member'"))
             if "source" not in user_columns:
                 conn.execute(text("ALTER TABLE users ADD COLUMN source VARCHAR NOT NULL DEFAULT 'web'"))
+            if "display_name" in user_columns:
+                conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_users_tenant_id_display_name "
+                        "ON users(tenant_id, display_name)"
+                    )
+                )
             _migrate_user_source_backfill(conn)
 
         if "sessions" in tables:
@@ -180,6 +216,13 @@ def _migrate_sqlite_skill_schema() -> None:
             conv_columns = {column["name"] for column in inspector.get_columns("channel_conv_states")}
             if "manual_pin_until" not in conv_columns:
                 conn.execute(text("ALTER TABLE channel_conv_states ADD COLUMN manual_pin_until DATETIME"))
+            if "routing_revision" not in conv_columns:
+                conn.execute(
+                    text(
+                        "ALTER TABLE channel_conv_states ADD COLUMN routing_revision "
+                        "INTEGER NOT NULL DEFAULT 0"
+                    )
+                )
 
         if "channel_bindings" in tables:
             binding_columns = {column["name"] for column in inspector.get_columns("channel_bindings")}
@@ -192,6 +235,42 @@ def _migrate_sqlite_skill_schema() -> None:
             delivery_columns = {column["name"] for column in inspector.get_columns("channel_deliveries")}
             if "sending_since" not in delivery_columns:
                 conn.execute(text("ALTER TABLE channel_deliveries ADD COLUMN sending_since DATETIME"))
+            if "delivery_owner" not in delivery_columns:
+                conn.execute(text("ALTER TABLE channel_deliveries ADD COLUMN delivery_owner VARCHAR"))
+            if "delivery_generation" not in delivery_columns:
+                conn.execute(
+                    text(
+                        "ALTER TABLE channel_deliveries ADD COLUMN delivery_generation "
+                        "INTEGER NOT NULL DEFAULT 0"
+                    )
+                )
+
+        if "channel_inbound_events" in tables:
+            inbound_columns = {
+                column["name"] for column in inspector.get_columns("channel_inbound_events")
+            }
+            if "processor_lease_expires_at" not in inbound_columns:
+                conn.execute(
+                    text(
+                        "ALTER TABLE channel_inbound_events ADD COLUMN "
+                        "processor_lease_expires_at DATETIME"
+                    )
+                )
+
+        if "human_handoff_requests" in tables:
+            handoff_columns = {
+                column["name"] for column in inspector.get_columns("human_handoff_requests")
+            }
+            if "notify_message_id" not in handoff_columns:
+                conn.execute(
+                    text("ALTER TABLE human_handoff_requests ADD COLUMN notify_message_id VARCHAR")
+                )
+                conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_human_handoff_requests_notify_message_id "
+                        "ON human_handoff_requests(notify_message_id)"
+                    )
+                )
 
         if "messages" in tables:
             message_columns = {column["name"] for column in inspector.get_columns("messages")}
@@ -303,6 +382,40 @@ def _migrate_sqlite_skill_schema() -> None:
             if "harness_storage_path" not in ui_columns:
                 conn.execute(
                     text("ALTER TABLE ui_configs ADD COLUMN harness_storage_path VARCHAR")
+                )
+
+        if "team_tasks" in tables:
+            team_task_columns = {
+                column["name"] for column in inspector.get_columns("team_tasks")
+            }
+            if "team_run_id" not in team_task_columns:
+                conn.execute(text("ALTER TABLE team_tasks ADD COLUMN team_run_id VARCHAR"))
+                conn.execute(
+                    text("CREATE INDEX IF NOT EXISTS ix_team_tasks_team_run_id ON team_tasks (team_run_id)")
+                )
+            if "source_turn_id" not in team_task_columns:
+                conn.execute(text("ALTER TABLE team_tasks ADD COLUMN source_turn_id VARCHAR"))
+                conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_team_tasks_source_turn_id "
+                        "ON team_tasks (source_turn_id)"
+                    )
+                )
+            if "depends_on_task_ids_json" not in team_task_columns:
+                conn.execute(text("ALTER TABLE team_tasks ADD COLUMN depends_on_task_ids_json JSON"))
+                conn.execute(
+                    text(
+                        "UPDATE team_tasks SET depends_on_task_ids_json = '[]' "
+                        "WHERE depends_on_task_ids_json IS NULL"
+                    )
+                )
+            if "activation_condition_json" not in team_task_columns:
+                conn.execute(text("ALTER TABLE team_tasks ADD COLUMN activation_condition_json JSON"))
+                conn.execute(
+                    text(
+                        "UPDATE team_tasks SET activation_condition_json = '{}' "
+                        "WHERE activation_condition_json IS NULL"
+                    )
                 )
 
         if "skill_feedback" in tables:
@@ -1596,6 +1709,7 @@ def _ensure_skill_graph(content: dict[str, object]) -> dict[str, object]:
     nodes = content.get("nodes")
     steps = content.get("steps")
     if isinstance(nodes, list) and nodes:
+        _ensure_required_capability_refs(nodes)
         content.pop("steps", None)
         content.setdefault("start_node_id", _first_node_id(nodes))
         content.setdefault("terminal_node_ids", [_last_node_id(nodes)] if _last_node_id(nodes) else [])
@@ -1624,6 +1738,31 @@ def _ensure_skill_graph(content: dict[str, object]) -> dict[str, object]:
         ]
     content.pop("steps", None)
     return content
+
+
+def _ensure_required_capability_refs(nodes: list[object]) -> None:
+    """Repair legacy nodes where a required capability was not also selected."""
+
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        refs = node.get("capability_refs")
+        if not isinstance(refs, dict):
+            continue
+        for required_field, selected_field in (
+            ("required_general_skill_ids", "general_skill_ids"),
+            ("required_tool_ids", "tool_ids"),
+            ("required_knowledge_base_ids", "knowledge_base_ids"),
+        ):
+            required = refs.get(required_field)
+            if not isinstance(required, list):
+                continue
+            selected = refs.get(selected_field)
+            selected_values = list(selected) if isinstance(selected, list) else []
+            for capability_id in required:
+                if capability_id not in selected_values:
+                    selected_values.append(capability_id)
+            refs[selected_field] = selected_values
 
 
 def _step_to_node_dict(step: dict[str, object]) -> dict[str, object]:
@@ -1754,6 +1893,9 @@ def _migrate_harness_v2_schema(conn, inspector, tables: set[str]) -> None:
             column["name"] for column in inspector.get_columns("harness_task_frames")
         }
         task_frame_column_sql = {
+            "agent_loop_id": (
+                "ALTER TABLE harness_task_frames ADD COLUMN agent_loop_id VARCHAR"
+            ),
             "decision": (
                 "ALTER TABLE harness_task_frames ADD COLUMN decision "
                 "VARCHAR NOT NULL DEFAULT 'answer_only'"
@@ -1802,12 +1944,19 @@ def _migrate_harness_v2_schema(conn, inspector, tables: set[str]) -> None:
                 "ON harness_task_frames(lease_expires_at)"
             )
         )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_harness_task_frames_agent_loop_id "
+                "ON harness_task_frames(agent_loop_id)"
+            )
+        )
 
     if "harness_runs" in tables:
         run_columns = {
             column["name"] for column in inspector.get_columns("harness_runs")
         }
         run_column_sql = {
+            "agent_loop_id": "ALTER TABLE harness_runs ADD COLUMN agent_loop_id VARCHAR",
             "attempt_no": (
                 "ALTER TABLE harness_runs ADD COLUMN attempt_no "
                 "INTEGER NOT NULL DEFAULT 1"
@@ -1836,6 +1985,12 @@ def _migrate_harness_v2_schema(conn, inspector, tables: set[str]) -> None:
             text(
                 "CREATE INDEX IF NOT EXISTS ix_harness_runs_lease_expires_at "
                 "ON harness_runs(lease_expires_at)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_harness_runs_agent_loop_id "
+                "ON harness_runs(agent_loop_id)"
             )
         )
 
@@ -1959,15 +2114,33 @@ def _migrate_knowledge_base_schema(conn, inspector, tables: set[str]) -> None:
                     {"tenant_id": tenant_id, "knowledge_base_id": _default_knowledge_base_id(tenant_id)},
                 )
 
+    resolved_version_ids: dict[str, str] = {}
     if "knowledge_base_versions" in tables and "knowledge_bases" in tables:
         knowledge_bases = conn.execute(text("SELECT * FROM knowledge_bases")).mappings().all()
         for row in knowledge_bases:
-            version_id = _knowledge_base_version_id(str(row["id"]), "1.0.0")
+            knowledge_base_id = str(row["id"])
+            version_id = _knowledge_base_version_id(knowledge_base_id, "1.0.0")
             existing = conn.execute(
-                text("SELECT id FROM knowledge_base_versions WHERE id = :id"),
-                {"id": version_id},
+                text(
+                    """
+                    SELECT id FROM knowledge_base_versions
+                    WHERE id = :id
+                       OR (
+                            tenant_id = :tenant_id
+                            AND knowledge_base_id = :knowledge_base_id
+                            AND version = '1.0.0'
+                       )
+                    """
+                ),
+                {
+                    "id": version_id,
+                    "tenant_id": row["tenant_id"],
+                    "knowledge_base_id": knowledge_base_id,
+                },
             ).first()
-            if not existing:
+            if existing:
+                version_id = str(existing[0])
+            else:
                 conn.execute(
                     text(
                         """
@@ -1985,7 +2158,7 @@ def _migrate_knowledge_base_schema(conn, inspector, tables: set[str]) -> None:
                     {
                         "id": version_id,
                         "tenant_id": row["tenant_id"],
-                        "knowledge_base_id": row["id"],
+                        "knowledge_base_id": knowledge_base_id,
                         "name": row["name"],
                         "description": row.get("description"),
                         "status": row.get("status") or "active",
@@ -1997,6 +2170,7 @@ def _migrate_knowledge_base_schema(conn, inspector, tables: set[str]) -> None:
                         "metadata_json": row.get("metadata_json") or "{}",
                     },
                 )
+            resolved_version_ids[knowledge_base_id] = version_id
 
     for table_name in table_names:
         if table_name not in tables:
@@ -2029,7 +2203,10 @@ def _migrate_knowledge_base_schema(conn, inspector, tables: set[str]) -> None:
                 ),
                 {
                     "knowledge_base_id": knowledge_base_id,
-                    "version_id": _knowledge_base_version_id(knowledge_base_id, "1.0.0"),
+                    "version_id": resolved_version_ids.get(
+                        knowledge_base_id,
+                        _knowledge_base_version_id(knowledge_base_id, "1.0.0"),
+                    ),
                 },
             )
 

@@ -112,6 +112,7 @@ function jsonResponse(body: unknown): Response {
     status: 200,
     statusText: 'OK',
     text: async () => JSON.stringify(body ?? {}),
+    blob: async () => new Blob([JSON.stringify(body ?? {})], { type: 'application/json' }),
   } as Response;
 }
 
@@ -267,6 +268,28 @@ beforeAll(() => {
 });
 
 describe('TeamDetailPage', () => {
+  it('downloads the complete team execution log', async () => {
+    const user = userEvent.setup();
+    const fetchMock = stubDetailFetch();
+    const createObjectURL = vi.fn(() => 'blob:team-log');
+    const revokeObjectURL = vi.fn();
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURL });
+    renderDetail();
+
+    await user.click(await screen.findByRole('button', { name: '下载完整日志' }));
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) =>
+        String(input).includes('/api/enterprise/teams/team-1/export?tenant_id=tenant_demo'),
+      )).toBe(true);
+      expect(createObjectURL).toHaveBeenCalledTimes(1);
+      expect(click).toHaveBeenCalledTimes(1);
+      expect(revokeObjectURL).toHaveBeenCalledWith('blob:team-log');
+    });
+  });
+
   it('renders members and groups kanban tasks by status', async () => {
     stubDetailFetch();
     renderDetail();
@@ -319,6 +342,20 @@ describe('TeamDetailPage', () => {
 
     expect(await screen.findByText('增长团队')).toBeTruthy();
     expect(screen.queryByLabelText('团队群聊')).toBeNull();
+  });
+
+  it('starts the persistent team conversation from team details', async () => {
+    const user = userEvent.setup();
+    const fetchMock = stubDetailFetch({ onTlSession: () => ({ session_id: 'team-session-2' }) });
+    renderDetail();
+
+    await user.click(await screen.findByRole('button', { name: '开始对话' }));
+
+    expect((await screen.findByTestId('location')).textContent).toBe('/workspace/chat/team-session-2');
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/api/enterprise/teams/team-1/tl/session'),
+      expect.objectContaining({ method: 'POST' }),
+    );
   });
 
   it('renders blackboard entries pinned first with tags and sources', async () => {
