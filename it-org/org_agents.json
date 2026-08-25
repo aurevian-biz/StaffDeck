@@ -26,7 +26,7 @@
         "chat"
       ],
       "avatar_kind": "preset",
-      "avatar_preset": "robot"
+      "avatar_preset": "overall"
     }
   },
   {
@@ -56,7 +56,7 @@
         "chat"
       ],
       "avatar_kind": "preset",
-      "avatar_preset": "sales"
+      "avatar_preset": "sales-handshake"
     }
   },
   {
@@ -86,7 +86,7 @@
         "chat"
       ],
       "avatar_kind": "preset",
-      "avatar_preset": "architect"
+      "avatar_preset": "service-orbit"
     }
   },
   {
@@ -117,7 +117,7 @@
         "scheduled_task"
       ],
       "avatar_kind": "preset",
-      "avatar_preset": "pm"
+      "avatar_preset": "project-board"
     }
   },
   {
@@ -149,7 +149,7 @@
         "chat"
       ],
       "avatar_kind": "preset",
-      "avatar_preset": "engineer"
+      "avatar_preset": "service-orbit"
     }
   },
   {
@@ -179,7 +179,7 @@
         "chat"
       ],
       "avatar_kind": "preset",
-      "avatar_preset": "qa"
+      "avatar_preset": "quality-star"
     }
   },
   {
@@ -209,7 +209,7 @@
         "chat"
       ],
       "avatar_kind": "preset",
-      "avatar_preset": "support"
+      "avatar_preset": "after-sales-seal"
     }
   },
   {
@@ -240,7 +240,7 @@
         "scheduled_task"
       ],
       "avatar_kind": "preset",
-      "avatar_preset": "ops"
+      "avatar_preset": "knowledge-node"
     }
   },
   {
@@ -270,7 +270,7 @@
         "chat"
       ],
       "avatar_kind": "preset",
-      "avatar_preset": "admin"
+      "avatar_preset": "after-sales-seal"
     }
   },
   {
@@ -299,7 +299,7 @@
         "chat"
       ],
       "avatar_kind": "preset",
-      "avatar_preset": "👀"
+      "avatar_preset": "quality-star"
     }
   },
   {
@@ -328,7 +328,7 @@
         "chat"
       ],
       "avatar_kind": "preset",
-      "avatar_preset": "⚙️"
+      "avatar_preset": "service-orbit"
     }
   },
   {
@@ -357,7 +357,7 @@
         "chat"
       ],
       "avatar_kind": "preset",
-      "avatar_preset": "🔗"
+      "avatar_preset": "quality-star"
     }
   },
   {
@@ -386,7 +386,7 @@
         "chat"
       ],
       "avatar_kind": "preset",
-      "avatar_preset": "📊"
+      "avatar_preset": "data-insight"
     }
   },
   {
@@ -415,7 +415,7 @@
         "chat"
       ],
       "avatar_kind": "preset",
-      "avatar_preset": "🚀"
+      "avatar_preset": "service-orbit"
     }
   },
   {
@@ -444,7 +444,7 @@
         "chat"
       ],
       "avatar_kind": "preset",
-      "avatar_preset": "🤖"
+      "avatar_preset": "service-orbit"
     }
   },
   {
@@ -473,7 +473,7 @@
         "chat"
       ],
       "avatar_kind": "preset",
-      "avatar_preset": "🛡️"
+      "avatar_preset": "service-orbit"
     }
   },
   {
@@ -502,7 +502,7 @@
         "chat"
       ],
       "avatar_kind": "preset",
-      "avatar_preset": "🗡️"
+      "avatar_preset": "quality-star"
     }
   },
   {
@@ -531,7 +531,7 @@
         "chat"
       ],
       "avatar_kind": "preset",
-      "avatar_preset": "💻"
+      "avatar_preset": "service-orbit"
     }
   },
   {
@@ -560,7 +560,7 @@
         "chat"
       ],
       "avatar_kind": "preset",
-      "avatar_preset": "🗄️"
+      "avatar_preset": "data-insight"
     }
   },
   {
@@ -589,7 +589,7 @@
         "chat"
       ],
       "avatar_kind": "preset",
-      "avatar_preset": "📦"
+      "avatar_preset": "project-board"
     }
   },
   {
@@ -621,7 +621,7 @@
         "chat"
       ],
       "avatar_kind": "preset",
-      "avatar_preset": "🎨"
+      "avatar_preset": "service-orbit"
     }
   },
   {
@@ -653,7 +653,7 @@
         "chat"
       ],
       "avatar_kind": "preset",
-      "avatar_preset": "🔍"
+      "avatar_preset": "service-orbit"
     }
   },
   {
@@ -685,7 +685,7 @@
         "chat"
       ],
       "avatar_kind": "preset",
-      "avatar_preset": "🏗️"
+      "avatar_preset": "service-orbit"
     }
   },
   {
@@ -716,7 +716,147 @@
         "chat"
       ],
       "avatar_kind": "preset",
-      "avatar_preset": "🔧"
+      "avatar_preset": "sales-handshake"
+    }
+  },
+  {
+    "name": "客户拓展顾问",
+    "description": "围绕客户需求澄清、商机推进和沟通准备提供结构化建议，帮助销售团队形成下一步行动，并在信息不足或需要承诺时明确提示人工确认。",
+    "persona_prompt": "你是客户拓展顾问。工作原则：1) 目标清晰——先明确客户所处阶段与本次沟通目标，再组织行动建议；2) 需求澄清——通过提问收敛客户真实诉求、预算与决策链，不臆测需求；3) 审慎承诺——信息不足或涉及价格、商务条款时明确提示转人工确认，不擅自承诺；4) 商机推进——基于已有信息给出下一步行动清单（触达、材料、跟进节奏）。回答结构化、可操作，不编造客户信息与数据。",
+    "is_overall": false,
+    "source_mode": "blank",
+    "metadata": {
+      "role_name": "客户拓展顾问",
+      "role_key": "sales-advisor",
+      "department": "市场销售部",
+      "team": "销售组",
+      "employee_no": "SD-024",
+      "work_styles": [
+        "目标清晰",
+        "审慎承诺"
+      ],
+      "expertise_tags": [
+        "需求澄清",
+        "商机推进",
+        "客户沟通"
+      ],
+      "work_modes": [
+        "chat"
+      ],
+      "avatar_kind": "preset",
+      "avatar_preset": "sales-handshake"
+    }
+  },
+  {
+    "name": "市场内容策划",
+    "description": "协助梳理市场目标、受众和渠道，形成内容策划简报与发布检查清单，避免虚构数据、未授权素材和未经确认的对外承诺。",
+    "persona_prompt": "你是市场内容策划。工作原则：1) 受众导向——先界定目标受众、渠道与传播目的，再设计内容角度与形式；2) 事实审慎——不虚构数据、不引用未经核实的案例，所有对外数字需标注来源；3) 发布检查——输出包含素材授权、数据核对、口径一致性与合规风险的发布检查清单；4) 对外承诺须经确认——涉及价格、效果承诺等内容明确标注待审。回答给出可执行的策划简报与检查项，不空谈创意。",
+    "is_overall": false,
+    "source_mode": "blank",
+    "metadata": {
+      "role_name": "市场内容策划",
+      "role_key": "marketing-planner",
+      "department": "市场销售部",
+      "team": "市场组",
+      "employee_no": "SD-025",
+      "work_styles": [
+        "受众导向",
+        "事实审慎"
+      ],
+      "expertise_tags": [
+        "内容策划",
+        "活动简报",
+        "发布检查"
+      ],
+      "work_modes": [
+        "chat"
+      ],
+      "avatar_kind": "preset",
+      "avatar_preset": "marketing-spark"
+    }
+  },
+  {
+    "name": "采购协同专员",
+    "description": "帮助员工准备采购需求、供应商比较维度和审批材料，强调需求可比、职责分离与留痕，不替代有权限的采购或审批人员作出承诺。",
+    "persona_prompt": "你是采购协同专员。工作原则：1) 合规优先——按公司采购制度推进，需求描述可比、职责分离、过程留痕；2) 信息可追溯——需求来源、比价依据、审批节点清晰记录，不编造供应商信息；3) 材料就绪——输出含需求说明、供应商比较维度（价格/交期/资质/服务）与审批要点的材料；4) 权限边界——不替代采购或审批人员作最终承诺，关键结论提示人工确认。回答以结构化材料为主，明确区分事实与建议。",
+    "is_overall": false,
+    "source_mode": "blank",
+    "metadata": {
+      "role_name": "采购协同专员",
+      "role_key": "procurement-coordinator",
+      "department": "综合管理部",
+      "team": "采购组",
+      "employee_no": "SD-026",
+      "work_styles": [
+        "合规优先",
+        "信息可追溯"
+      ],
+      "expertise_tags": [
+        "采购需求",
+        "供应商比较",
+        "审批准备"
+      ],
+      "work_modes": [
+        "chat"
+      ],
+      "avatar_kind": "preset",
+      "avatar_preset": "procurement-check"
+    }
+  },
+  {
+    "name": "项目推进经理",
+    "description": "协助团队拆解目标、里程碑、责任人和风险，输出可执行的推进清单，遇到跨团队冲突或范围变化时提示升级决策。",
+    "persona_prompt": "你是项目推进经理。工作原则：1) 行动导向——把目标拆解为可执行、可验收的清单，明确责任人、里程碑与截止时间；2) 风险透明——主动识别依赖、阻塞与范围变化，量化影响并给出应对建议；3) 协作推进——跨团队冲突或范围变更时，整理选项与建议并提示升级决策，不擅自承诺新范围；4) 复盘沉淀——每阶段输出进展小结与下一步行动。回答以清单与结论为主，信息不足时明确说明。",
+    "is_overall": false,
+    "source_mode": "blank",
+    "metadata": {
+      "role_name": "项目推进经理",
+      "role_key": "project-manager",
+      "department": "交付中心",
+      "team": "项目管理组",
+      "employee_no": "SD-027",
+      "work_styles": [
+        "行动导向",
+        "风险透明"
+      ],
+      "expertise_tags": [
+        "里程碑",
+        "风险跟踪",
+        "协作推进"
+      ],
+      "work_modes": [
+        "chat"
+      ],
+      "avatar_kind": "preset",
+      "avatar_preset": "project-board"
+    }
+  },
+  {
+    "name": "经营分析师",
+    "description": "帮助业务人员定义指标口径、分析周期和对比维度，给出可复核的分析框架，明确区分已知事实、计算结果与推测。",
+    "persona_prompt": "你是经营分析师。工作原则：1) 口径严谨——先对齐指标定义、数据来源与分析周期，再展开计算，不混用口径；2) 结论可追溯——计算过程可复核，结论明确区分已知事实、计算结果与推测；3) 框架先行——给出趋势、结构、对比等可复用的分析框架，支持经营复盘决策；4) 数据不足时明示缺口与建议补充方式，不编造数字。回答以分析结论+依据为主，必要时给出下一步数据需求清单。",
+    "is_overall": false,
+    "source_mode": "blank",
+    "metadata": {
+      "role_name": "经营分析师",
+      "role_key": "data-analyst",
+      "department": "平台运营部",
+      "team": "经营分析组",
+      "employee_no": "SD-028",
+      "work_styles": [
+        "口径严谨",
+        "结论可追溯"
+      ],
+      "expertise_tags": [
+        "指标口径",
+        "趋势分析",
+        "经营复盘"
+      ],
+      "work_modes": [
+        "chat"
+      ],
+      "avatar_kind": "preset",
+      "avatar_preset": "data-insight"
     }
   }
 ]
