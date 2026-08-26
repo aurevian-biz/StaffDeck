@@ -60,6 +60,8 @@ class CapabilityManifestBuilder:
         agent_id: str | None,
         skill: Skill | None,
         step_id: str | None,
+        *,
+        context_compression_mode: str | None = None,
     ) -> CapabilityManifest:
         if agent_id and get_agent(self.db, tenant_id, agent_id) is None:
             raise CapabilityAuthorizationError("当前员工不存在、已归档或不属于该租户。")
@@ -68,6 +70,10 @@ class CapabilityManifestBuilder:
         unavailable: list[CapabilityDescriptor] = []
 
         available.extend(_internal_capability_descriptors())
+        if context_compression_mode == "acp":
+            # Legacy preference must keep these names out of allowed_names()
+            # so a model call hits the existing illegal-tool error path.
+            available.extend(_acp_capability_descriptors())
         ui_config = self.db.get(UIConfig, tenant_id)
         sandbox_enabled = bool(getattr(ui_config, "sandbox_enabled", False))
 
@@ -455,6 +461,111 @@ def _internal_capability_descriptors() -> list[CapabilityDescriptor]:
                     }
                 },
                 "required": ["capabilities"],
+                "additionalProperties": False,
+            },
+            metadata={"provider": "harness", "side_effect": "read"},
+        ),
+    ]
+
+
+def _acp_capability_descriptors() -> list[CapabilityDescriptor]:
+    """Internal ACP compression capabilities (wire names == tool_name values)."""
+    return [
+        CapabilityDescriptor(
+            capability_id="builtin.acp.compress",
+            name="acp_compress",
+            kind="internal",
+            description=(
+                "Compress a range of transcript blocks into one summary block "
+                "written by you. The original content is preserved in a "
+                "checkpoint and can be restored later with acp_decompress or "
+                "found with acp_search_context. Use this when the transcript "
+                "grows too large."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "seq_start": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "First block sequence index to compress (inclusive).",
+                    },
+                    "seq_end": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Last block sequence index to compress (inclusive).",
+                    },
+                    "summary": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Summary text replacing the compressed blocks.",
+                    },
+                },
+                "required": ["seq_start", "seq_end", "summary"],
+                "additionalProperties": False,
+            },
+            metadata={"provider": "harness", "side_effect": "read"},
+        ),
+        CapabilityDescriptor(
+            capability_id="builtin.acp.decompress",
+            name="acp_decompress",
+            kind="internal",
+            description=(
+                "Restore the original transcript entries hidden by an earlier "
+                "acp_compress. Pass the summary block_id returned by "
+                "acp_compress or listed by acp_status."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "block_id": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Summary block id to restore.",
+                    },
+                },
+                "required": ["block_id"],
+                "additionalProperties": False,
+            },
+            metadata={"provider": "harness", "side_effect": "read"},
+        ),
+        CapabilityDescriptor(
+            capability_id="builtin.acp.search_context",
+            name="acp_search_context",
+            kind="internal",
+            description=(
+                "Lexically search both visible transcript blocks and hidden "
+                "checkpointed content. Use this to locate details that were "
+                "compressed earlier, then acp_decompress the matching block."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "minLength": 1},
+                    "top_k": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20,
+                        "default": 8,
+                    },
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+            metadata={"provider": "harness", "side_effect": "read"},
+        ),
+        CapabilityDescriptor(
+            capability_id="builtin.acp.status",
+            name="acp_status",
+            kind="internal",
+            description=(
+                "Report the current compression ledger: block counts, tiers, "
+                "checkpoints, and token balance. Use this to decide whether "
+                "to compress the transcript."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {},
                 "additionalProperties": False,
             },
             metadata={"provider": "harness", "side_effect": "read"},

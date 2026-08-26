@@ -12,6 +12,7 @@ from sqlmodel import select
 from app.core.cancellation import is_chat_turn_cancelled
 from app.core.capability_discovery import project_capability_manifest
 from app.core.capability_manifest import CapabilityManifestBuilder
+from app.config import get_settings
 from app.core.harness_agent import (
     HarnessExecutionCancelled,
     HarnessExecutionFenced,
@@ -771,6 +772,19 @@ class HarnessV2Engine:
         max_actions: int,
     ) -> tuple[TaskExecutionResult, StepAgentResult]:
         self.store.mark_running(row)
+        # Same preference chain as the session layer (U4): the owner resolves
+        # the tenant preference; the ACP_ENABLED flag forces legacy when off.
+        context_compression_mode = (
+            "acp"
+            if (
+                self.owner._get_context_compression_mode(
+                    request.tenant_id, session.agent_id
+                )
+                == "acp"
+                and get_settings().acp_enabled
+            )
+            else "legacy"
+        )
         agent_loop = self.store.ensure_agent_loop(row)
         loop_checkpoint = dict(agent_loop.checkpoint_json or {})
         self.active_frame_id = row.id
@@ -831,6 +845,7 @@ class HarnessV2Engine:
                 session.agent_id,
                 active_skill,
                 frame.target_step_id,
+                context_compression_mode=context_compression_mode,
             )
             # Keep the complete frozen manifest server-side for authorization,
             # while compiling the TaskRequirement only from the safe model
@@ -934,6 +949,7 @@ class HarnessV2Engine:
                 ),
                 trace_sink=trace,
                 step_deadline_monotonic=step_deadline_monotonic,
+                context_compression_mode=context_compression_mode,
             )
 
             result = self.task_agent.run(
@@ -947,6 +963,7 @@ class HarnessV2Engine:
                 step_deadline_monotonic=step_deadline_monotonic,
                 step_timeout_seconds=step_timeout_seconds,
                 checkpoint=loop_checkpoint,
+                context_compression_mode=context_compression_mode,
             )
             deferred_continuation = False
             if frame.kind == "sop":

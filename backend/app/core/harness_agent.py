@@ -5,12 +5,15 @@ import json
 import logging
 import time
 from collections.abc import Callable
-from dataclasses import is_dataclass, replace
+from dataclasses import asdict, is_dataclass, replace
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError
 
 from app import paths
+from app.core.acp import AcpEngine, AcpError
+from app.core.acp.blocks import Block
+from app.core.acp.checkpoint import CheckpointRecord
 from app.core.harness_attachments import (
     ValidatedTaskImagePayload,
     isolated_attachment_context,
@@ -32,6 +35,14 @@ MAX_SUCCESSFUL_KNOWLEDGE_SEARCHES_PER_TASK = 2
 ToolInvoker = Callable[[str, dict[str, Any]], dict[str, Any]]
 TraceSink = Callable[[str, dict[str, Any]], None]
 CancellationCheck = Callable[[], bool]
+
+ACP_CAPABILITY_NAMES = frozenset(
+    {"acp_compress", "acp_decompress", "acp_search_context", "acp_status"}
+)
+# compress/decompress mutate the transcript in place (summary entry replaces
+# the compressed range / restored entries replace the summary entry), so the
+# regular assistant+tool append is skipped for them.
+_TRANSCRIPT_SYNCED_ACP_CAPABILITIES = frozenset({"acp_compress", "acp_decompress"})
 
 
 class HarnessExecutionCancelled(RuntimeError):
@@ -61,6 +72,9 @@ class HarnessAction(BaseModel):
 class HarnessTaskAgent:
     """Runs one isolated TaskRequirement without outer conversation messages."""
 
+    def __init__(self, context_compression_mode: str = "legacy") -> None:
+        self._context_compression_mode = context_compression_mode
+
     def run(
         self,
         requirement: TaskRequirement,
@@ -74,6 +88,7 @@ class HarnessTaskAgent:
         step_deadline_monotonic: float | None = None,
         step_timeout_seconds: int | None = None,
         checkpoint: dict[str, Any] | None = None,
+        context_compression_mode: str | None = None,
     ) -> TaskExecutionResult:
         max_actions = max(1, min(int(max_actions), 100))
         checkpoint = dict(checkpoint or {})
@@ -112,6 +127,12 @@ class HarnessTaskAgent:
         recent_task_summaries = _string_list(
             checkpoint.get("recent_task_summaries")
         )[-8:]
+        acp_mode = (context_compression_mode or self._context_compression_mode) == "acp"
+        acp_engine = (
+            _acp_engine_for_transcript(transcript, checkpoint.get("acp_state"))
+            if acp_mode
+            else None
+        )
         # A non-retryable failure only blocks an identical call inside this
         # invocation of the AgentLoop.  Persisting the signature in the
         # checkpoint made a later user turn inherit an obsolete failure even
@@ -139,7 +160,7 @@ class HarnessTaskAgent:
                 "version": 1,
                 "task_frame_id": requirement.task_frame_id,
                 "step_id": current_step_id,
-                "transcript": _transcript_for_model(transcript),
+                "transcript": _transcript_for_model(transcript, acp_mode=acp_mode),
                 "citations": citations[-20:],
                 "evidence_results": evidence_results[-10:],
                 "capability_results": capability_results[-20:],
@@ -151,6 +172,10 @@ class HarnessTaskAgent:
                 "loaded_general_skill_names": loaded_general_skill_names[-20:],
                 "recent_task_summaries": recent_task_summaries[-8:],
             }
+            if acp_mode and acp_engine is not None:
+                result.loop_checkpoint["acp_state"] = _serialize_acp_engine_state(
+                    acp_engine
+                )
             if collected_acp_ops:
                 result.loop_checkpoint["acp_ops"] = list(collected_acp_ops)
             return result
@@ -459,7 +484,16 @@ class HarnessTaskAgent:
                 else:
                     try:
                         _raise_if_cancelled(is_cancelled)
-                        result = invoke_tool(tool_name, dict(action.arguments or {}))
+                        if acp_mode and tool_name in ACP_CAPABILITY_NAMES:
+                            assert acp_engine is not None
+                            result = _invoke_acp_capability(
+                                acp_engine,
+                                tool_name,
+                                dict(action.arguments or {}),
+                                transcript,
+                            )
+                        else:
+                            result = invoke_tool(tool_name, dict(action.arguments or {}))
                         _raise_if_cancelled(is_cancelled)
                     except (HarnessExecutionCancelled, HarnessExecutionFenced):
                         raise
@@ -476,21 +510,34 @@ class HarnessTaskAgent:
             bounded_result = _bounded_capability_result(tool_name, result)
             if _is_loaded_general_skill_result(tool_name, result):
                 loaded_general_skill_names.append(tool_name)
-            transcript.extend(
-                [
-                    {
-                        "role": "assistant",
-                        "action": "tool",
-                        "tool_name": tool_name,
-                        "arguments": action.arguments,
-                    },
-                    {
-                        "role": "tool",
-                        "tool_name": tool_name,
-                        "result": bounded_result,
-                    },
-                ]
-            )
+            if (
+                acp_mode
+                and tool_name in _TRANSCRIPT_SYNCED_ACP_CAPABILITIES
+                and result.get("success") is True
+            ):
+                # compress/decompress already replaced the compressed range
+                # with the summary entry (or restored the original entries)
+                # inside the kernel dispatch, keeping transcript and block
+                # store in sync; nothing is appended here.
+                pass
+            else:
+                transcript.extend(
+                    [
+                        {
+                            "role": "assistant",
+                            "action": "tool",
+                            "tool_name": tool_name,
+                            "arguments": action.arguments,
+                        },
+                        {
+                            "role": "tool",
+                            "tool_name": tool_name,
+                            "result": bounded_result,
+                        },
+                    ]
+                )
+                if acp_mode and acp_engine is not None:
+                    _append_transcript_blocks(acp_engine, transcript[-2:])
             if tool_name not in {"capability_search", "capability_describe"}:
                 capability_results.append(bounded_result)
             if _deadline_expired(step_deadline_monotonic):
@@ -907,6 +954,7 @@ def _transcript_for_model(
     transcript: list[dict[str, Any]],
     *,
     keep_recent_entries: int = 6,
+    acp_mode: bool = False,
 ) -> list[dict[str, Any]]:
     """Project persistent tool history into a bounded execution context.
 
@@ -914,7 +962,13 @@ def _transcript_for_model(
     needs the newest interactions plus stable receipts for older operations.
     GeneralSkill package instructions are retained because they define the
     workflow the current AgentLoop is following.
+
+    Under ACP the model drives compression itself via acp_compress, so the
+    full transcript is projected and the legacy receipt/cap path is bypassed.
     """
+
+    if acp_mode:
+        return [dict(entry) for entry in transcript]
 
     cutoff = max(0, len(transcript) - keep_recent_entries)
     latest_skill_instruction_index: dict[str, int] = {}
@@ -1003,6 +1057,268 @@ def _is_general_skill_instruction_entry(entry: dict[str, Any]) -> bool:
         return False
     result = entry.get("result")
     return isinstance(result, dict) and bool(result.get("success"))
+
+
+def _acp_engine_for_transcript(
+    transcript: list[dict[str, Any]],
+    acp_state: object,
+) -> AcpEngine:
+    """Build the task-level kernel, restoring persisted state when possible.
+
+    The kernel is framework-agnostic and has no persistence API, so the task
+    wrapper restores its internal stores directly (same format as the session
+    layer). Block ids are preserved so model-issued decompress references stay
+    valid across turns. A malformed or missing state falls back to seeding the
+    engine from the transcript; compressed content is then unrecoverable but
+    the task never crashes.
+    """
+    engine = AcpEngine()
+    if isinstance(acp_state, dict):
+        _restore_acp_engine_state(engine, acp_state)
+    if len(engine.blocks()) != len(transcript):
+        engine = AcpEngine()
+        _append_transcript_blocks(engine, transcript)
+    return engine
+
+
+def _restore_acp_engine_state(engine: AcpEngine, acp_state: dict[str, Any]) -> None:
+    blocks = acp_state.get("blocks")
+    if isinstance(blocks, list):
+        restored = [
+            Block(
+                block_id=int(raw.get("block_id") or 0),
+                message_id=str(raw.get("message_id") or ""),
+                content=str(raw.get("content") or ""),
+                tier=int(raw.get("tier") or 1),
+                is_summary=bool(raw.get("is_summary")),
+                checkpoint_id=raw.get("checkpoint_id"),
+                skip=bool(raw.get("skip")),
+            )
+            for raw in blocks
+            if isinstance(raw, dict)
+        ]
+        engine._store._blocks = restored
+        engine._store._next_id = max((block.block_id for block in restored), default=0) + 1
+    checkpoints = acp_state.get("checkpoints")
+    if isinstance(checkpoints, list):
+        records: dict[int, CheckpointRecord] = {}
+        for raw in checkpoints:
+            if not isinstance(raw, dict):
+                continue
+            checkpoint_id = int(raw.get("checkpoint_id") or 0)
+            originals = tuple(
+                Block(
+                    block_id=int(item.get("block_id") or 0),
+                    message_id=str(item.get("message_id") or ""),
+                    content=str(item.get("content") or ""),
+                    tier=int(item.get("tier") or 1),
+                    is_summary=bool(item.get("is_summary")),
+                    checkpoint_id=item.get("checkpoint_id"),
+                    skip=bool(item.get("skip")),
+                )
+                for item in raw.get("original_blocks") or []
+                if isinstance(item, dict)
+            )
+            records[checkpoint_id] = CheckpointRecord(
+                checkpoint_id=checkpoint_id,
+                seq_start=int(raw.get("seq_start") or 0),
+                seq_end=int(raw.get("seq_end") or 0),
+                summary_block_id=int(raw.get("summary_block_id") or 0),
+                tier=int(raw.get("tier") or 1),
+                original_blocks=originals,
+                token_delta=int(raw.get("token_delta") or 0),
+                created_at=float(raw.get("created_at") or 0.0),
+            )
+        engine._checkpoints._records = records
+        engine._checkpoints._next_id = max(records, default=0) + 1
+    balance = acp_state.get("ledger_balance")
+    if isinstance(balance, int):
+        engine._ledger._balance = max(0, balance)
+
+
+def _serialize_acp_engine_state(engine: AcpEngine) -> dict[str, Any]:
+    """Persist the task-level kernel into the loop checkpoint.
+
+    Every block content is the serialized transcript entry itself, so no
+    separate roles/ingested-id bookkeeping is needed (unlike the session
+    layer). Checkpoint originals are kept in full so decompress stays
+    recoverable across turns.
+    """
+    return {
+        "blocks": [
+            {
+                "block_id": block.block_id,
+                "message_id": block.message_id,
+                "content": block.content,
+                "tier": block.tier,
+                "is_summary": block.is_summary,
+                "checkpoint_id": block.checkpoint_id,
+                "skip": block.skip,
+            }
+            for block in engine.blocks()
+        ],
+        "checkpoints": [
+            {
+                "checkpoint_id": record.checkpoint_id,
+                "seq_start": record.seq_start,
+                "seq_end": record.seq_end,
+                "summary_block_id": record.summary_block_id,
+                "tier": record.tier,
+                "token_delta": record.token_delta,
+                "created_at": record.created_at,
+                "original_blocks": [
+                    {
+                        "block_id": block.block_id,
+                        "message_id": block.message_id,
+                        "content": block.content,
+                        "tier": block.tier,
+                        "is_summary": block.is_summary,
+                        "checkpoint_id": block.checkpoint_id,
+                        "skip": block.skip,
+                    }
+                    for block in record.original_blocks
+                ],
+            }
+            for record in engine._checkpoints.all()
+        ],
+        "ledger_balance": engine.ledger.balance,
+        "ledger_warnings": list(engine.ledger.warnings),
+    }
+
+
+def _append_transcript_blocks(
+    engine: AcpEngine,
+    entries: list[dict[str, Any]],
+) -> None:
+    for entry in entries:
+        engine.add_message(
+            f"t{len(engine.blocks())}",
+            json.dumps(entry, ensure_ascii=False, default=str),
+        )
+
+
+def _invoke_acp_capability(
+    engine: AcpEngine,
+    tool_name: str,
+    arguments: dict[str, Any],
+    transcript: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Dispatch one ACP tool call to the task-level kernel.
+
+    compress/decompress keep the transcript in sync with the kernel block
+    store: the compressed range is replaced by a summary entry (or the
+    summary entry is replaced by the restored original entries). Kernel
+    errors surface as structured capability errors the model can see.
+    """
+    if tool_name == "acp_compress":
+        seq_start = _acp_int_argument(arguments, "seq_start")
+        seq_end = _acp_int_argument(arguments, "seq_end")
+        summary = str(arguments.get("summary") or "").strip()
+        if seq_start is None or seq_end is None or not summary:
+            return _acp_failure(
+                "INVALID_ARGUMENTS",
+                "acp_compress 需要整数 seq_start/seq_end 与非空 summary。",
+            )
+        result = engine.compress(seq_start, seq_end, summary)
+        if isinstance(result, AcpError):
+            return _acp_failure(result.code, result.message, result.detail)
+        transcript[seq_start : seq_end + 1] = [
+            {
+                "role": "tool",
+                "tool_name": "acp_compress",
+                "result": {
+                    "success": True,
+                    "data": {
+                        "summary": summary,
+                        "summary_block_id": result.summary_block_id,
+                        "checkpoint_id": result.checkpoint_id,
+                        "tier": result.tier,
+                        "removed_block_ids": list(result.removed_block_ids),
+                        "token_delta": result.token_delta,
+                        "ledger_balance": result.ledger_balance,
+                    },
+                },
+            }
+        ]
+        return {"success": True, "data": asdict(result)}
+    if tool_name == "acp_decompress":
+        block_id = _acp_int_argument(arguments, "block_id")
+        if block_id is None:
+            return _acp_failure("INVALID_ARGUMENTS", "acp_decompress 需要整数 block_id。")
+        position = _block_position(engine, block_id)
+        if position is None:
+            return _acp_failure(
+                "BLOCK_NOT_FOUND",
+                f"block {block_id} 不在当前压缩账本中。",
+                {"block_id": block_id},
+            )
+        result = engine.decompress(block_id)
+        if isinstance(result, AcpError):
+            return _acp_failure(result.code, result.message, result.detail)
+        restored = engine.blocks()[position : position + len(result.restored_block_ids)]
+        transcript[position : position + 1] = [
+            _deserialize_transcript_entry(block.content) for block in restored
+        ]
+        return {"success": True, "data": asdict(result)}
+    if tool_name == "acp_search_context":
+        query = str(arguments.get("query") or "").strip()
+        if not query:
+            return _acp_failure("INVALID_ARGUMENTS", "acp_search_context 需要非空 query。")
+        top_k = arguments.get("top_k")
+        if top_k is not None and (isinstance(top_k, bool) or not isinstance(top_k, int)):
+            return _acp_failure("INVALID_ARGUMENTS", "acp_search_context top_k 必须是整数。")
+        return {"success": True, "data": asdict(engine.search_context(query, top_k=top_k))}
+    if tool_name == "acp_status":
+        return {"success": True, "data": asdict(engine.status())}
+    return _acp_failure(
+        "UNSUPPORTED_INTERNAL_CAPABILITY",
+        f"不支持的 ACP 能力：{tool_name}",
+    )
+
+
+def _acp_failure(
+    code: str,
+    message: str,
+    detail: dict[str, object] | None = None,
+) -> dict[str, Any]:
+    error: dict[str, Any] = {"code": code, "message": message}
+    if detail:
+        error["detail"] = detail
+    return {"success": False, "error": error}
+
+
+def _acp_int_argument(arguments: dict[str, Any], key: str) -> int | None:
+    value = arguments.get(key)
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _block_position(engine: AcpEngine, block_id: int) -> int | None:
+    for index, block in enumerate(engine.blocks()):
+        if block.block_id == block_id:
+            return index
+    return None
+
+
+def _deserialize_transcript_entry(content: str) -> dict[str, Any]:
+    try:
+        value = json.loads(content)
+    except (TypeError, ValueError):
+        value = None
+    if isinstance(value, dict):
+        return value
+    return {
+        "role": "tool",
+        "tool_name": "acp_decompress",
+        "result": {
+            "success": False,
+            "error": {
+                "code": "ACP_RESTORE_INVALID",
+                "message": "压缩块内容无法还原为 transcript 条目。",
+            },
+        },
+    }
 
 
 def _history_receipt(value: Any) -> dict[str, Any]:
