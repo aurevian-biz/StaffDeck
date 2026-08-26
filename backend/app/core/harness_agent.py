@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import is_dataclass, replace
@@ -23,6 +24,8 @@ from app.db.models import ModelConfig
 from app.llm import LLMClient, LLMError
 from app.observability.spans import llm_operation
 from app.session.slot_policy import strip_router_generated_message_slots
+
+logger = logging.getLogger(__name__)
 
 PROMPT_PATH = paths.resource_dir() / "app" / "llm" / "prompts" / "harness_agent_prompt.md"
 MAX_SUCCESSFUL_KNOWLEDGE_SEARCHES_PER_TASK = 2
@@ -49,6 +52,10 @@ class HarnessAction(BaseModel):
     next_step_id: str | None = None
     task_summary: str = ""
     structured_result: Any | None = None
+    # Optional ACP (Active Context Pruning) operations attached by the model
+    # alongside a normal action. Backward-compatible extension: absent for
+    # every existing protocol consumer, so no protocol break.
+    acp_ops: dict[str, Any] | None = None
 
 
 class HarnessTaskAgent:
@@ -113,6 +120,7 @@ class HarnessTaskAgent:
         allowed_names = requirement.capability_manifest.allowed_names()
         system_prompt = PROMPT_PATH.read_text(encoding="utf-8").strip()
         pending_actions: list[HarnessAction] = []
+        collected_acp_ops: list[dict[str, Any]] = []
 
         def finish(result: TaskExecutionResult) -> TaskExecutionResult:
             summary = " ".join(
@@ -143,6 +151,8 @@ class HarnessTaskAgent:
                 "loaded_general_skill_names": loaded_general_skill_names[-20:],
                 "recent_task_summaries": recent_task_summaries[-8:],
             }
+            if collected_acp_ops:
+                result.loop_checkpoint["acp_ops"] = list(collected_acp_ops)
             return result
 
         for iteration in range(1, max_actions + 1):
@@ -307,6 +317,8 @@ class HarnessTaskAgent:
                     action_count=iteration,
                     error={"code": "HARNESS_ACTION_INVALID", "message": str(exc)},
                 ))
+            if action is not None and isinstance(action.acp_ops, dict) and action.acp_ops:
+                collected_acp_ops.append(action.acp_ops)
             _raise_if_cancelled(is_cancelled)
             if _deadline_expired(step_deadline_monotonic):
                 return finish(_step_timeout_result(
@@ -648,13 +660,28 @@ def _harness_actions_from_raw(raw: object) -> list[HarnessAction]:
     if isinstance(raw, dict) and set(raw) == {"actions"}:
         items = raw.get("actions")
     if not isinstance(items, list):
-        return [HarnessAction.model_validate(items)]
+        return [HarnessAction.model_validate(_sanitize_acp_ops(items))]
     if not items:
         raise ValueError("Harness action sequence must not be empty.")
-    actions = [HarnessAction.model_validate(item) for item in items]
+    actions = [HarnessAction.model_validate(_sanitize_acp_ops(item)) for item in items]
     if any(action.action == "finish" for action in actions[:-1]):
         raise ValueError("A finish action must be the final item in an action sequence.")
     return actions
+
+
+def _sanitize_acp_ops(item: object) -> object:
+    """Drop malformed acp_ops so a bad op never fails the turn."""
+    if not isinstance(item, dict) or "acp_ops" not in item:
+        return item
+    if isinstance(item["acp_ops"], dict):
+        return item
+    logger.warning(
+        "ignoring malformed acp_ops (expected dict, got %s)",
+        type(item["acp_ops"]).__name__,
+    )
+    sanitized = dict(item)
+    sanitized.pop("acp_ops", None)
+    return sanitized
 
 
 def _adapt_general_skill_structured_result(

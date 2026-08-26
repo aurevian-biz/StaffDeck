@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterator
+from dataclasses import asdict, is_dataclass
 from time import sleep
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from sqlmodel import Session, select
 
@@ -13,6 +14,10 @@ from app.agents.branching import (
     visible_skill,
 )
 from app.channels.service_outbox import stage_channel_delivery
+from app.config import get_settings
+from app.core.acp import AcpConfig, AcpEngine, AcpError
+from app.core.acp.blocks import Block
+from app.core.acp.checkpoint import CheckpointRecord
 from app.core.agent_identity_prompt import AgentIdentityPrompt
 from app.core.cancellation import clear_chat_turn_cancelled
 from app.core.conversation_context import build_conversation_context
@@ -39,6 +44,7 @@ from app.db.models import (
     AgentProfile,
     ChannelBinding,
     ChatSession,
+    HarnessAgentLoopRecord,
     HarnessTurnRecord,
     HumanHandoffRequest,
     Message,
@@ -80,6 +86,8 @@ MAX_TOOL_ACTIONS_PER_TURN = 32
 MAX_TOOL_ACTIONS_PER_TURN_LIMIT = 100
 GRAPH_PENDING_STEPS_SLOT = "_graph_pending_steps"
 CANCELLED_ASSISTANT_REPLY = "已停止生成"
+DEFAULT_CONTEXT_COMPRESSION_MODE = "legacy"
+ACP_CHECKPOINT_ORIGINALS_CAP = 5
 ExecutionFinalizeState = Literal["continued", "completed", "handoff"]
 
 
@@ -128,6 +136,223 @@ def _metadata_prompt_text(value: object) -> str:
 
 def _single_line_text(value: object) -> str:
     return AgentIdentityPrompt.single_line(value)
+
+
+def _resolve_compression_mode(preference: str, *, acp_enabled: bool) -> str:
+    """Apply the ACP feature flag: disabled forces legacy regardless of preference."""
+    if preference != "acp" or not acp_enabled:
+        return "legacy"
+    return "acp"
+
+
+def _acp_config_for_tenant(db: Session, tenant_id: str) -> AcpConfig:
+    """Build the kernel config from user thresholds, falling back to upstream defaults."""
+    row = db.get(UIConfig, tenant_id) if hasattr(db, "get") else None
+    if row is None:
+        return AcpConfig()
+    try:
+        return AcpConfig(
+            model_context_limit=max(1, int(row.acp_model_context_limit or 128000)),
+            nudge_max_context_limit_pct=float(row.acp_nudge_max_pct or 0.70),
+            nudge_emergency_threshold_pct=float(row.acp_nudge_emergency_pct or 0.85),
+            nudge_min_context_limit_pct=float(row.acp_nudge_min_pct or 0.45),
+        )
+    except ValueError:
+        logger.warning("invalid ACP thresholds for tenant %s; using defaults", tenant_id)
+        return AcpConfig()
+
+
+def _acp_state_from_context(context_state: dict[str, Any] | None) -> dict[str, Any]:
+    source = context_state if isinstance(context_state, dict) else {}
+    acp_state = source.get("acp")
+    return dict(acp_state) if isinstance(acp_state, dict) else {}
+
+
+def _restore_acp_engine(engine: AcpEngine, acp_state: dict[str, Any]) -> None:
+    """Rebuild the in-memory kernel from the persisted acp sub-state.
+
+    The kernel is framework-agnostic and has no persistence API, so the
+    session wrapper restores its internal stores directly. Block ids are
+    preserved so model-issued decompress references stay valid across turns.
+    """
+    blocks = acp_state.get("blocks")
+    if isinstance(blocks, list):
+        restored = [
+            Block(
+                block_id=int(raw.get("block_id") or 0),
+                message_id=str(raw.get("message_id") or ""),
+                content=str(raw.get("content") or ""),
+                tier=int(raw.get("tier") or 1),
+                is_summary=bool(raw.get("is_summary")),
+                checkpoint_id=raw.get("checkpoint_id"),
+                skip=bool(raw.get("skip")),
+            )
+            for raw in blocks
+            if isinstance(raw, dict)
+        ]
+        engine._store._blocks = restored
+        engine._store._next_id = max((block.block_id for block in restored), default=0) + 1
+    checkpoints = acp_state.get("checkpoints")
+    if isinstance(checkpoints, list):
+        records: dict[int, CheckpointRecord] = {}
+        for raw in checkpoints:
+            if not isinstance(raw, dict):
+                continue
+            checkpoint_id = int(raw.get("checkpoint_id") or 0)
+            originals = tuple(
+                Block(
+                    block_id=int(item.get("block_id") or 0),
+                    message_id=str(item.get("message_id") or ""),
+                    content=str(item.get("content") or ""),
+                    tier=int(item.get("tier") or 1),
+                    is_summary=bool(item.get("is_summary")),
+                    checkpoint_id=item.get("checkpoint_id"),
+                    skip=bool(item.get("skip")),
+                )
+                for item in raw.get("original_blocks") or []
+                if isinstance(item, dict)
+            )
+            records[checkpoint_id] = CheckpointRecord(
+                checkpoint_id=checkpoint_id,
+                seq_start=int(raw.get("seq_start") or 0),
+                seq_end=int(raw.get("seq_end") or 0),
+                summary_block_id=int(raw.get("summary_block_id") or 0),
+                tier=int(raw.get("tier") or 1),
+                original_blocks=originals,
+                token_delta=int(raw.get("token_delta") or 0),
+                created_at=float(raw.get("created_at") or 0.0),
+            )
+        engine._checkpoints._records = records
+        engine._checkpoints._next_id = max(records, default=0) + 1
+    balance = acp_state.get("ledger_balance")
+    if isinstance(balance, int):
+        engine._ledger._balance = max(0, balance)
+
+
+def _serialize_acp_engine(
+    engine: AcpEngine,
+    *,
+    ingested_message_ids: list[str],
+    roles: dict[str, str],
+    compaction_count: int,
+    max_originals: int = ACP_CHECKPOINT_ORIGINALS_CAP,
+) -> dict[str, Any]:
+    """Persist the kernel state into the acp sub-state.
+
+    Checkpoint ORIGINAL text is bounded: only the ``max_originals`` most
+    recent checkpoints keep their original blocks; older checkpoints keep
+    their index metadata with empty originals so ``context_state_json``
+    cannot grow unboundedly with compression count (plan fix F11).
+    """
+    checkpoints = engine._checkpoints.all()
+    evicted = set(checkpoints[:-max_originals])
+    return {
+        "blocks": [
+            {
+                "block_id": block.block_id,
+                "message_id": block.message_id,
+                "role": roles.get(block.message_id, "user"),
+                "content": block.content,
+                "tier": block.tier,
+                "is_summary": block.is_summary,
+                "checkpoint_id": block.checkpoint_id,
+                "skip": block.skip,
+            }
+            for block in engine.blocks()
+        ],
+        "checkpoints": [
+            {
+                "checkpoint_id": record.checkpoint_id,
+                "seq_start": record.seq_start,
+                "seq_end": record.seq_end,
+                "summary_block_id": record.summary_block_id,
+                "tier": record.tier,
+                "token_delta": record.token_delta,
+                "created_at": record.created_at,
+                "originals_evicted": record in evicted,
+                "original_blocks": [
+                    {
+                        "block_id": block.block_id,
+                        "message_id": block.message_id,
+                        "role": roles.get(block.message_id, "user"),
+                        "content": block.content,
+                        "tier": block.tier,
+                        "is_summary": block.is_summary,
+                        "checkpoint_id": block.checkpoint_id,
+                        "skip": block.skip,
+                    }
+                    for block in record.original_blocks
+                ]
+                if record not in evicted
+                else [],
+            }
+            for record in checkpoints
+        ],
+        "roles": dict(roles),
+        "ingested_message_ids": list(ingested_message_ids),
+        "next_block_id": engine._store.next_id(),
+        "next_checkpoint_id": engine._checkpoints.next_id(),
+        "ledger_balance": engine.ledger.balance,
+        "ledger_warnings": list(engine.ledger.warnings),
+        "compaction_count": compaction_count,
+    }
+
+
+def _acp_result_to_dict(result: object) -> dict[str, Any]:
+    if not is_dataclass(result):
+        return {"value": str(result)}
+    return asdict(cast(Any, result))
+
+
+def _execute_acp_ops(
+    engine: AcpEngine, ops: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], bool]:
+    """Execute pending model acp_ops against the session-level engine.
+
+    Each op is a dict mapping op name -> arguments, e.g.
+    ``{"compress": {"seq_start": 0, "seq_end": 2, "summary": "..."}}``.
+    Returns ``(results, ok)``; on the first structured ``AcpError`` execution
+    stops, the error is logged, and ``ok=False`` lets the caller fall back to
+    the legacy summary path without breaking the turn.
+    """
+    results: list[dict[str, Any]] = []
+    for op in ops:
+        if not isinstance(op, dict):
+            continue
+        for name, arguments in op.items():
+            if not isinstance(arguments, dict):
+                logger.warning("acp op %s ignored: arguments must be a dict", name)
+                continue
+            if name == "compress":
+                result = engine.compress(
+                    int(arguments.get("seq_start") or 0),
+                    int(arguments.get("seq_end") or 0),
+                    str(arguments.get("summary") or ""),
+                )
+            elif name == "decompress":
+                result = engine.decompress(int(arguments.get("block_id") or 0))
+            elif name == "search_context":
+                result = engine.search_context(
+                    str(arguments.get("query") or ""),
+                    top_k=arguments.get("top_k"),
+                )
+            elif name == "status":
+                result = engine.status()
+            else:
+                logger.warning("unknown acp op %s ignored", name)
+                continue
+            if isinstance(result, AcpError):
+                logger.warning("acp op %s failed: %s", name, result.message)
+                results.append(
+                    {
+                        "op": name,
+                        "success": False,
+                        "error": {"code": result.code, "message": result.message},
+                    }
+                )
+                return results, False
+            results.append({"op": name, "success": True, "result": _acp_result_to_dict(result)})
+    return results, True
 
 
 class AgentLoopPreconditionError(Exception):
@@ -1226,6 +1451,37 @@ class AgentLoop:
         value = row.agent_loop_max_actions if row else MAX_TOOL_ACTIONS_PER_TURN
         return max(1, min(int(value), MAX_TOOL_ACTIONS_PER_TURN_LIMIT))
 
+    def _get_context_compression_mode(
+        self, tenant_id: str, agent_id: str | None = None
+    ) -> str:
+        """Resolve the tenant's context compression preference.
+
+        Precedence chain mirrors ``_get_agent_loop_max_actions``:
+        1. AgentProfile-level override — future hook: ``metadata_json`` may
+           carry a per-agent ``context_compression_mode``; read tolerantly
+           when present (no new profile fields are introduced).
+        2. ``UIConfig.context_compression_mode`` (tenant-level preference).
+        3. Constant default ``"legacy"``.
+        The ACP_ENABLED feature flag is applied by the caller via
+        ``_resolve_compression_mode``.
+        """
+        if not hasattr(self.db, "get"):
+            return DEFAULT_CONTEXT_COMPRESSION_MODE
+        agent = self.db.get(AgentProfile, agent_id) if agent_id else None
+        if agent is not None and (
+            agent.tenant_id != tenant_id or agent.status != "active"
+        ):
+            agent = None
+        if agent is not None:
+            metadata = agent.metadata_json
+            if isinstance(metadata, dict):
+                value = str(metadata.get("context_compression_mode") or "").strip()
+                if value in {"acp", "legacy"}:
+                    return value
+        row = self.db.get(UIConfig, tenant_id)
+        value = str(row.context_compression_mode or "").strip() if row else ""
+        return value if value in {"acp", "legacy"} else DEFAULT_CONTEXT_COMPRESSION_MODE
+
     def _list_published_skills(self, tenant_id: str, agent_id: str | None = None) -> list[Skill]:
         return visible_published_skills(self.db, tenant_id, agent_id)
 
@@ -1360,22 +1616,127 @@ class AgentLoop:
             ).all()
         )
         visible_rows = visible_message_rows(rows)
-        context = build_conversation_context(
-            [
-                ConversationProjection.message_context_entry(
-                    row,
-                    content=visible_message_content(row),
-                )
-                for row in visible_rows
-            ],
-            context_state=chat_session.context_state_json,
-            summary_builder=self._context_summary_builder(model_config) if model_config else None,
+        entries = [
+            ConversationProjection.message_context_entry(
+                row,
+                content=visible_message_content(row),
+            )
+            for row in visible_rows
+        ]
+        mode = _resolve_compression_mode(
+            self._get_context_compression_mode(
+                chat_session.tenant_id, chat_session.agent_id
+            ),
+            acp_enabled=get_settings().acp_enabled,
         )
+        if mode == "acp":
+            context = self._acp_conversation_context(
+                chat_session, entries, model_config=model_config
+            )
+        else:
+            context = build_conversation_context(
+                entries,
+                context_state=chat_session.context_state_json,
+                summary_builder=(
+                    self._context_summary_builder(model_config) if model_config else None
+                ),
+            )
         next_state = context.get("context_state")
         if isinstance(next_state, dict) and next_state != (chat_session.context_state_json or {}):
             chat_session.context_state_json = next_state
             self.db.add(chat_session)
         return context
+
+    def _acp_conversation_context(
+        self,
+        chat_session: ChatSession,
+        entries: list[dict[str, Any]],
+        *,
+        model_config: ModelConfig | None = None,
+    ) -> dict[str, object]:
+        """ACP-routed context: execute pending model acp_ops against the
+        session-level AcpEngine, then project the resulting blocks.
+
+        Summaries come from the model's ``acp_compress`` op — the legacy
+        ``_context_summary_builder`` (second LLM call) is bypassed here.
+        """
+        acp_state = _acp_state_from_context(chat_session.context_state_json)
+        engine = AcpEngine(config=_acp_config_for_tenant(self.db, chat_session.tenant_id))
+        _restore_acp_engine(engine, acp_state)
+        ingested = set(acp_state.get("ingested_message_ids") or [])
+        roles = dict(acp_state.get("roles") or {})
+        for entry in entries:
+            message_id = str(entry.get("id") or "")
+            if not message_id or message_id in ingested:
+                continue
+            engine.add_message(message_id, str(entry.get("content") or ""))
+            ingested.add(message_id)
+            roles[message_id] = str(entry.get("role") or "user")
+        pending_ops, loop = self._pending_acp_ops(chat_session)
+        results, ok = _execute_acp_ops(engine, pending_ops)
+        if loop is not None:
+            self._clear_pending_acp_ops(loop)
+        if not ok:
+            logger.warning(
+                "acp ops failed for session %s; falling back to legacy summary path",
+                chat_session.id,
+            )
+            return build_conversation_context(
+                entries,
+                context_state=chat_session.context_state_json,
+                summary_builder=(
+                    self._context_summary_builder(model_config) if model_config else None
+                ),
+            )
+        compaction_count = int(acp_state.get("compaction_count") or 0) + sum(
+            1
+            for result in results
+            if result.get("op") == "compress" and result.get("success")
+        )
+        next_acp_state = _serialize_acp_engine(
+            engine,
+            ingested_message_ids=sorted(ingested),
+            roles=roles,
+            compaction_count=compaction_count,
+        )
+        for op_name, state_key in (("search_context", "last_search"), ("status", "last_status")):
+            for result in results:
+                if result.get("op") == op_name and result.get("success"):
+                    next_acp_state[state_key] = result["result"]
+                    break
+        next_state = dict(chat_session.context_state_json or {})
+        next_state["acp"] = next_acp_state
+        return build_conversation_context(
+            entries,
+            context_state=next_state,
+            compression_mode="acp",
+        )
+
+    def _pending_acp_ops(
+        self, chat_session: ChatSession
+    ) -> tuple[list[dict[str, Any]], HarnessAgentLoopRecord | None]:
+        """Read pending acp_ops from the latest general agent-loop checkpoint."""
+        loop = self.db.exec(
+            select(HarnessAgentLoopRecord)
+            .where(
+                HarnessAgentLoopRecord.session_id == chat_session.id,
+                HarnessAgentLoopRecord.loop_key == f"general:{chat_session.id}",
+            )
+            .order_by(HarnessAgentLoopRecord.created_at.desc())
+        ).first()
+        if loop is None or not isinstance(loop.checkpoint_json, dict):
+            return [], loop
+        raw_ops = loop.checkpoint_json.get("acp_ops")
+        if not isinstance(raw_ops, list):
+            return [], loop
+        return [op for op in raw_ops if isinstance(op, dict)], loop
+
+    def _clear_pending_acp_ops(self, loop: HarnessAgentLoopRecord) -> None:
+        checkpoint = dict(loop.checkpoint_json or {})
+        if "acp_ops" in checkpoint:
+            checkpoint.pop("acp_ops", None)
+            loop.checkpoint_json = checkpoint
+            self.db.add(loop)
 
     def _context_summary_builder(self, model_config: ModelConfig) -> Callable[[str, str, int], str]:
         def summarize(label: str, source: str, token_budget: int) -> str:
