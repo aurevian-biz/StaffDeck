@@ -11,9 +11,10 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, ValidationError
 
 from app import paths
-from app.core.acp import AcpEngine, AcpError
+from app.core.acp import AcpConfig, AcpEngine, AcpError
 from app.core.acp.blocks import Block
 from app.core.acp.checkpoint import CheckpointRecord
+from app.core.acp.pricing import RealUsageMeter, TokenMeter
 from app.core.harness_attachments import (
     ValidatedTaskImagePayload,
     isolated_attachment_context,
@@ -25,6 +26,7 @@ from app.core.task_request_compiler import (
 )
 from app.db.models import ModelConfig
 from app.llm import LLMClient, LLMError
+from app.llm.client import latest_llm_usage_observation
 from app.observability.spans import llm_operation
 from app.session.slot_policy import strip_router_generated_message_slots
 
@@ -89,6 +91,7 @@ class HarnessTaskAgent:
         step_timeout_seconds: int | None = None,
         checkpoint: dict[str, Any] | None = None,
         context_compression_mode: str | None = None,
+        acp_config: AcpConfig | None = None,
     ) -> TaskExecutionResult:
         max_actions = max(1, min(int(max_actions), 100))
         checkpoint = dict(checkpoint or {})
@@ -128,8 +131,14 @@ class HarnessTaskAgent:
             checkpoint.get("recent_task_summaries")
         )[-8:]
         acp_mode = (context_compression_mode or self._context_compression_mode) == "acp"
+        acp_meter = RealUsageMeter(usage_source=latest_llm_usage_observation) if acp_mode else None
         acp_engine = (
-            _acp_engine_for_transcript(transcript, checkpoint.get("acp_state"))
+            _acp_engine_for_transcript(
+                transcript,
+                checkpoint.get("acp_state"),
+                meter=acp_meter,
+                config=acp_config,
+            )
             if acp_mode
             else None
         )
@@ -218,6 +227,10 @@ class HarnessTaskAgent:
                 payload["agent_loop_memory"] = {
                     "recent_task_summaries": list(recent_task_summaries),
                 }
+            if acp_mode and acp_engine is not None and acp_meter is not None:
+                nudge = _acp_task_nudge(acp_engine, acp_meter, transcript)
+                if nudge is not None:
+                    payload["acp_nudge"] = nudge
             if attachment_context is not None:
                 payload["conversation_context"] = attachment_context
             try:
@@ -1062,6 +1075,8 @@ def _is_general_skill_instruction_entry(entry: dict[str, Any]) -> bool:
 def _acp_engine_for_transcript(
     transcript: list[dict[str, Any]],
     acp_state: object,
+    meter: TokenMeter | None = None,
+    config: AcpConfig | None = None,
 ) -> AcpEngine:
     """Build the task-level kernel, restoring persisted state when possible.
 
@@ -1072,13 +1087,47 @@ def _acp_engine_for_transcript(
     engine from the transcript; compressed content is then unrecoverable but
     the task never crashes.
     """
-    engine = AcpEngine()
+    engine = AcpEngine(config=config, meter=meter)
     if isinstance(acp_state, dict):
         _restore_acp_engine_state(engine, acp_state)
     if len(engine.blocks()) != len(transcript):
         engine = AcpEngine()
         _append_transcript_blocks(engine, transcript)
     return engine
+
+
+def _acp_task_nudge(
+    engine: AcpEngine,
+    meter: RealUsageMeter,
+    transcript: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Evaluate task-context pressure and build the advisory nudge payload.
+
+    Real usage (the meter source) wins when available; otherwise the
+    pre-check estimate of the serialized transcript is used and flagged.
+    The nudge is advisory only — the model decides whether to compress.
+    """
+    pressure_tokens = meter.latest_usage_tokens
+    estimated = pressure_tokens is None
+    if pressure_tokens is None:
+        pressure_tokens = meter.estimate_tokens(
+            json.dumps(transcript, ensure_ascii=False, default=str)
+        )
+    recommendation = engine.nudge(pressure_tokens)
+    if recommendation is None:
+        return None
+    hint = (
+        "如之前已压缩过任务记录，可先查看 acp_status 并复用仍有效的压缩块"
+        "（acp_decompress / acp_search_context 可找回细节）。"
+    )
+    return {
+        "level": recommendation.level,
+        "message": f"{recommendation.message}\n{hint}",
+        "usage_pct": recommendation.usage_pct,
+        "current_tokens": recommendation.current_tokens,
+        "limit_tokens": recommendation.limit_tokens,
+        "estimated": estimated,
+    }
 
 
 def _restore_acp_engine_state(engine: AcpEngine, acp_state: dict[str, Any]) -> None:

@@ -785,6 +785,13 @@ class HarnessV2Engine:
             )
             else "legacy"
         )
+        acp_config = None
+        if context_compression_mode == "acp":
+            # Lazy import: agent_loop imports this module at module level, so
+            # a top-level import here would be circular.
+            from app.core.agent_loop import _acp_config_for_tenant
+
+            acp_config = _acp_config_for_tenant(self.db, request.tenant_id)
         agent_loop = self.store.ensure_agent_loop(row)
         loop_checkpoint = dict(agent_loop.checkpoint_json or {})
         self.active_frame_id = row.id
@@ -964,6 +971,7 @@ class HarnessV2Engine:
                 step_timeout_seconds=step_timeout_seconds,
                 checkpoint=loop_checkpoint,
                 context_compression_mode=context_compression_mode,
+                acp_config=acp_config,
             )
             deferred_continuation = False
             if frame.kind == "sop":

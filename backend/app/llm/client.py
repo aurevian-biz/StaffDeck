@@ -38,6 +38,28 @@ from app.llm.stage_protocol import (
 from app.observability.spans import current_llm_operation, llm_span_attributes, start_llm_call
 from app.security.encryption import decrypt_secret
 
+# Latest real usage observation for the ACP shadow-price meter
+# (core/acp/pricing.py). Absent usage clears it so the meter falls back to
+# its estimate path instead of reusing a stale value (issue #54).
+_last_usage_observation: dict[str, int] | None = None
+
+
+def _record_usage_observation(input_tokens: int | None, source_chars: int | None) -> None:
+    """Record the latest real usage observation for the ACP shadow-price meter."""
+    global _last_usage_observation
+    if input_tokens is None or input_tokens < 0:
+        _last_usage_observation = None
+        return
+    _last_usage_observation = {
+        "input_tokens": int(input_tokens),
+        "source_chars": max(1, int(source_chars or 0)),
+    }
+
+
+def latest_llm_usage_observation() -> dict[str, int] | None:
+    """Latest real ``(input_tokens, source_chars)`` observation, or None."""
+    return _last_usage_observation
+
 
 class LLMError(Exception):
     """Raised when an LLM provider request or response normalization fails."""
@@ -259,6 +281,9 @@ class LLMClient:
                     raise
                 content = _completion_message_content(completion)
                 metrics = _completion_span_metrics(completion)
+                _record_usage_observation(
+                    metrics.get("input_tokens"), request_shape.get("request_text_chars")
+                )
                 response_message = _observable_completion_message(completion)
                 response_payload = _observable_provider_payload(completion)
                 if content.strip():
@@ -444,6 +469,10 @@ class LLMClient:
                     raise
                 if emitted_text:
                     response_text = "".join(recorded_parts)
+                    _record_usage_observation(
+                        stream_usage_metrics.get("input_tokens"),
+                        request_shape.get("request_text_chars"),
+                    )
                     response_message = {
                         "role": "assistant",
                         "content": response_text,

@@ -18,6 +18,8 @@ from app.config import get_settings
 from app.core.acp import AcpConfig, AcpEngine, AcpError
 from app.core.acp.blocks import Block
 from app.core.acp.checkpoint import CheckpointRecord
+from app.core.acp.nudge import NudgeRecommendation
+from app.core.acp.pricing import RealUsageMeter
 from app.core.agent_identity_prompt import AgentIdentityPrompt
 from app.core.cancellation import clear_chat_turn_cancelled
 from app.core.conversation_context import build_conversation_context
@@ -60,6 +62,7 @@ from app.knowledge.citations import (
     restore_truncated_atomic_references,
 )
 from app.llm import LLMClient, LLMError
+from app.llm.client import latest_llm_usage_observation
 from app.llm.model_config_resolver import (
     resolve_model_config_for_runtime,
 )
@@ -160,6 +163,49 @@ def _acp_config_for_tenant(db: Session, tenant_id: str) -> AcpConfig:
     except ValueError:
         logger.warning("invalid ACP thresholds for tenant %s; using defaults", tenant_id)
         return AcpConfig()
+
+
+def _acp_nudge_message(recommendation: NudgeRecommendation) -> str:
+    """Compose the advisory nudge copy with the reuse-check hint.
+
+    The kernel message already frames compression as model-decided and
+    non-mandatory; the hint reminds the model to reuse previously compressed
+    blocks before compressing again.
+    """
+    hint = (
+        "如之前已压缩过历史消息，可先检查压缩块索引（acp_status）并复用其中仍有效的内容"
+        "（acp_decompress / acp_search_context 可找回细节）。"
+    )
+    return f"{recommendation.message}\n{hint}"
+
+
+def _attach_acp_nudge(
+    context: dict[str, object],
+    engine: AcpEngine,
+    meter: RealUsageMeter,
+) -> None:
+    """Attach an advisory nudge to the session context when pressure crosses a threshold.
+
+    Pressure uses the meter's real usage when available; otherwise the
+    pre-check estimate from the projected context metadata (``_estimate_tokens``
+    stays pre-check only and never writes into the ledger). The nudge is
+    advisory only — the model decides whether to compress (autoNudge).
+    """
+    pressure_tokens = meter.latest_usage_tokens
+    estimated = pressure_tokens is None
+    if pressure_tokens is None:
+        pressure_tokens = int((context.get("metadata") or {}).get("estimated_tokens") or 0)
+    recommendation = engine.nudge(pressure_tokens)
+    if recommendation is None:
+        return
+    context["nudge"] = {
+        "level": recommendation.level,
+        "message": _acp_nudge_message(recommendation),
+        "usage_pct": recommendation.usage_pct,
+        "current_tokens": recommendation.current_tokens,
+        "limit_tokens": recommendation.limit_tokens,
+        "estimated": estimated,
+    }
 
 
 def _acp_state_from_context(context_state: dict[str, Any] | None) -> dict[str, Any]:
@@ -1661,7 +1707,11 @@ class AgentLoop:
         ``_context_summary_builder`` (second LLM call) is bypassed here.
         """
         acp_state = _acp_state_from_context(chat_session.context_state_json)
-        engine = AcpEngine(config=_acp_config_for_tenant(self.db, chat_session.tenant_id))
+        meter = RealUsageMeter(usage_source=latest_llm_usage_observation)
+        engine = AcpEngine(
+            config=_acp_config_for_tenant(self.db, chat_session.tenant_id),
+            meter=meter,
+        )
         _restore_acp_engine(engine, acp_state)
         ingested = set(acp_state.get("ingested_message_ids") or [])
         roles = dict(acp_state.get("roles") or {})
@@ -1706,11 +1756,13 @@ class AgentLoop:
                     break
         next_state = dict(chat_session.context_state_json or {})
         next_state["acp"] = next_acp_state
-        return build_conversation_context(
+        context = build_conversation_context(
             entries,
             context_state=next_state,
             compression_mode="acp",
         )
+        _attach_acp_nudge(context, engine, meter)
+        return context
 
     def _pending_acp_ops(
         self, chat_session: ChatSession
