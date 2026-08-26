@@ -774,16 +774,15 @@ class HarnessV2Engine:
         self.store.mark_running(row)
         # Same preference chain as the session layer (U4): the owner resolves
         # the tenant preference; the ACP_ENABLED flag forces legacy when off.
-        context_compression_mode = (
-            "acp"
-            if (
-                self.owner._get_context_compression_mode(
-                    request.tenant_id, session.agent_id
-                )
-                == "acp"
-                and get_settings().acp_enabled
-            )
-            else "legacy"
+        # Lazy import: agent_loop imports this module at module level, so a
+        # top-level import here would be circular.
+        from app.core.agent_loop import _resolve_compression_mode
+
+        context_compression_mode = _resolve_compression_mode(
+            self.owner._get_context_compression_mode(
+                request.tenant_id, session.agent_id
+            ),
+            acp_enabled=get_settings().acp_enabled,
         )
         acp_config = None
         if context_compression_mode == "acp":

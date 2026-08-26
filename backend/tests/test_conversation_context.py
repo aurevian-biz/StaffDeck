@@ -394,3 +394,153 @@ def test_acp_state_restores_engine_for_next_turn() -> None:
     )
     assert context["messages"][0]["content"].startswith(LONG_SUMMARY_PREFIX)
     assert context["messages"][1]["content"] == "第三条"
+
+
+def test_legacy_mode_preserves_legacy_four_key_state() -> None:
+    legacy_state = {
+        "long_term_summary": "长期摘要",
+        "medium_term_summary": "近期摘要",
+        "summarized_through_message_id": "message_3",
+        "compaction_count": 3,
+    }
+    messages = [
+        {
+            "id": f"message_{index}",
+            "role": "user" if index % 2 == 0 else "assistant",
+            "content": f"内容 {index}",
+        }
+        for index in range(8)
+    ]
+
+    context = build_conversation_context(
+        messages, token_budget=1_000, context_state=legacy_state
+    )
+    state = context["context_state"]
+
+    assert state["compaction_count"] == 3
+    assert state["long_term_summary"] == "长期摘要"
+    assert state["medium_term_summary"] == "近期摘要"
+    assert context["messages"][0]["content"].startswith(LONG_SUMMARY_PREFIX)
+    assert context["messages"][1]["content"].startswith(MEDIUM_SUMMARY_PREFIX)
+    assert context["messages"][-1]["content"] == "内容 7"
+
+
+def test_invalid_context_state_falls_back_to_empty_state() -> None:
+    messages = [{"role": "user", "content": "你好"}]
+    for bad_state in (
+        None,
+        "not-a-dict",
+        42,
+        {"acp": "not-a-dict"},
+        {"acp": {"blocks": "bad"}},
+    ):
+        context = build_conversation_context(
+            messages,
+            context_state=bad_state,  # type: ignore[arg-type]
+            compression_mode="acp",
+        )
+        state = context["context_state"]
+        assert state["compaction_count"] == 0
+        assert state["long_term_summary"] == ""
+        assert context["messages"][-1]["content"] == "你好"
+
+
+def test_legacy_mode_skips_summary_prefixed_messages_when_compacting() -> None:
+    messages = [
+        {"id": "m1", "role": "user", "content": f"{LONG_SUMMARY_PREFIX}\n历史摘要内容"},
+        {"id": "m2", "role": "user", "content": f"{MEDIUM_SUMMARY_PREFIX}\n近期摘要内容"},
+        *[
+            {
+                "id": f"m{index}",
+                "role": "user",
+                "content": f"普通消息 {index} " + "x" * 120,
+            }
+            for index in range(3, 15)
+        ],
+    ]
+
+    context = build_conversation_context(messages, token_budget=300)
+    state = context["context_state"]
+
+    assert state["compaction_count"] == 1
+    assert "历史摘要内容" not in state["medium_term_summary"]
+    assert "近期摘要内容" not in state["medium_term_summary"]
+    assert state["summarized_through_message_id"] == "m8"
+
+
+def test_acp_switch_back_preserves_checkpoints_and_merges_new_messages() -> None:
+    engine = AcpEngine()
+    engine.add_messages([("m1", "第一条"), ("m2", "第二条"), ("m3", "第三条")])
+    _execute_acp_ops(
+        engine, [{"compress": {"seq_start": 0, "seq_end": 1, "summary": "前两条摘要"}}]
+    )
+    acp_state = _serialize_acp_engine(
+        engine,
+        ingested_message_ids=["m1", "m2", "m3"],
+        roles={"m1": "user", "m2": "assistant", "m3": "user"},
+        compaction_count=1,
+    )
+    context_state = {"acp": acp_state}
+
+    # Legacy 期间：acp 子状态与 checkpoint 保留不清理。
+    legacy_context = build_conversation_context(
+        [
+            {"id": "m1", "role": "user", "content": "第一条"},
+            {"id": "m2", "role": "assistant", "content": "第二条"},
+            {"id": "m3", "role": "user", "content": "第三条"},
+        ],
+        token_budget=1_000,
+        context_state=context_state,
+    )
+    assert legacy_context["context_state"]["acp"] == acp_state
+
+    # 切回 ACP：恢复引擎与 checkpoint，legacy 期间的新消息合并为新块。
+    loop = object.__new__(AgentLoop)
+    loop.db = SimpleNamespace(
+        get=lambda _model, _key: None,
+        exec=lambda _stmt: SimpleNamespace(first=lambda: None),
+    )
+    chat_session = SimpleNamespace(
+        id="session_1",
+        tenant_id="tenant_test",
+        agent_id=None,
+        context_state_json=context_state,
+    )
+    context = loop._acp_conversation_context(
+        chat_session,
+        [
+            {"id": "m1", "role": "user", "content": "第一条"},
+            {"id": "m2", "role": "assistant", "content": "第二条"},
+            {"id": "m3", "role": "user", "content": "第三条"},
+            {"id": "m4", "role": "user", "content": "第四条"},
+        ],
+        model_config=None,
+    )
+    messages = context["messages"]
+
+    assert messages[0]["content"].startswith(LONG_SUMMARY_PREFIX)
+    assert messages[1]["content"] == "第三条"
+    assert messages[2]["content"] == "第四条"
+    next_acp = context["context_state"]["acp"]
+    assert len(next_acp["checkpoints"]) == 1
+    assert "m4" in next_acp["ingested_message_ids"]
+
+
+def test_fit_request_messages_keeps_mixed_legacy_and_acp_summaries() -> None:
+    messages = [
+        {"role": "user", "content": f"{LONG_SUMMARY_PREFIX}\n长期摘要内容"},
+        {"role": "user", "content": f"{MEDIUM_SUMMARY_PREFIX}\n近期摘要内容"},
+        {"role": "user", "content": f"{LONG_SUMMARY_PREFIX}\nACP 摘要块内容"},
+        *[
+            {"role": "user", "content": f"填充消息 {index} " + "x" * 200}
+            for index in range(10)
+        ],
+        {"role": "user", "content": "最后一条"},
+    ]
+
+    fitted = _fit_request_messages(messages, token_budget=200)
+
+    assert fitted[0]["content"].startswith(LONG_SUMMARY_PREFIX)
+    assert fitted[1]["content"].startswith(MEDIUM_SUMMARY_PREFIX)
+    assert fitted[2]["content"].startswith(LONG_SUMMARY_PREFIX)
+    assert fitted[-1]["content"] == "最后一条"

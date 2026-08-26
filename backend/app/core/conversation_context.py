@@ -38,6 +38,10 @@ def build_conversation_context(
         recent = _recent_rounds(unsummarized, RECENT_ROUND_LIMIT)
         older_count = len(unsummarized) - len(recent)
         older = unsummarized[:older_count]
+        # Skip already-summarized messages (legacy or ACP summary blocks
+        # carrying the shared prefixes) so they are never destructively
+        # re-summarized when a session switches back to legacy (plan fix F8).
+        older = [message for message in older if not _is_summary_message(message)]
         if older:
             previous_history = _joined_existing_history(state)
             state["long_term_summary"] = _summarize(
@@ -295,6 +299,12 @@ def _public_message(message: dict[str, Any]) -> dict[str, Any]:
         for key, value in message.items()
         if key in {"role", "content", "images"}
     }
+
+
+def _is_summary_message(message: dict[str, Any]) -> bool:
+    return str(message.get("content") or "").startswith(
+        (LONG_SUMMARY_PREFIX, MEDIUM_SUMMARY_PREFIX)
+    )
 
 
 def _recent_rounds(
