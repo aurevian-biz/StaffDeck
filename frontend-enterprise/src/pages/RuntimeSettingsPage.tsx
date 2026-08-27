@@ -94,21 +94,48 @@ export default function RuntimeSettingsPage({ currentUser }: { currentUser: Ente
       .catch((error) => notify.error(error.message));
   }, []);
 
+  const NUMERIC_FIELDS = [
+    'reflection_max_rounds',
+    'agent_loop_max_actions',
+    'acp_model_context_limit',
+    'acp_nudge_max_pct',
+    'acp_nudge_emergency_pct',
+    'acp_nudge_min_pct',
+  ] as const;
+
   function parseNumericForm(form: UiConfigForm) {
     return {
-      reflectionMaxRounds: Number(form.reflection_max_rounds),
-      agentLoopMaxActions: Number(form.agent_loop_max_actions),
-      acpModelContextLimit: Number(form.acp_model_context_limit),
-      acpNudgeMaxPct: Number(form.acp_nudge_max_pct),
-      acpNudgeEmergencyPct: Number(form.acp_nudge_emergency_pct),
-      acpNudgeMinPct: Number(form.acp_nudge_min_pct),
+      reflectionMaxRounds: Number(form.reflection_max_rounds.trim()),
+      agentLoopMaxActions: Number(form.agent_loop_max_actions.trim()),
+      acpModelContextLimit: Number(form.acp_model_context_limit.trim()),
+      acpNudgeMaxPct: Number(form.acp_nudge_max_pct.trim()),
+      acpNudgeEmergencyPct: Number(form.acp_nudge_emergency_pct.trim()),
+      acpNudgeMinPct: Number(form.acp_nudge_min_pct.trim()),
     };
   }
 
   async function save() {
+    // 空/纯空白输入会被 Number() 解析为 0，必须先按字符串判空，避免把空值提交为 0
+    if (NUMERIC_FIELDS.some((field) => form[field].trim() === '')) {
+      notify.error('反思轮数、单轮最大动作数与 ACP 阈值必须是数字');
+      return;
+    }
     const values = parseNumericForm(form);
     if (Object.values(values).some(Number.isNaN)) {
       notify.error('反思轮数、单轮最大动作数与 ACP 阈值必须是数字');
+      return;
+    }
+    if (values.acpModelContextLimit < 1) {
+      notify.error('上下文上限不能小于 1');
+      return;
+    }
+    const acpRatios = [values.acpNudgeMaxPct, values.acpNudgeEmergencyPct, values.acpNudgeMinPct];
+    if (acpRatios.some((ratio) => ratio < 0 || ratio > 1)) {
+      notify.error('压缩触发阈值必须在 0 到 1 之间');
+      return;
+    }
+    if (values.acpNudgeMinPct > values.acpNudgeMaxPct || values.acpNudgeMaxPct > values.acpNudgeEmergencyPct) {
+      notify.error('常规压缩触发阈值不能高于紧急压缩触发阈值，最低压缩触发阈值不能高于常规压缩触发阈值');
       return;
     }
     if (form.context_compression_mode !== savedModeRef.current) {

@@ -1,5 +1,9 @@
 from types import SimpleNamespace
 
+import pytest
+from sqlalchemy.pool import StaticPool
+from sqlmodel import Session, SQLModel, create_engine
+
 from app.core.acp import AcpEngine
 from app.core.agent_loop import (
     AgentLoop,
@@ -8,12 +12,19 @@ from app.core.agent_loop import (
     _restore_acp_engine,
     _serialize_acp_engine,
 )
+from app.core.capability_manifest import _acp_capability_descriptors
 from app.core.conversation_context import (
     LONG_SUMMARY_PREFIX,
     MEDIUM_SUMMARY_PREFIX,
     build_conversation_context,
 )
-from app.core.harness_agent import _harness_actions_from_raw
+from app.core.harness_agent import HarnessTaskAgent, _harness_actions_from_raw
+from app.core.task_request_compiler import (
+    CapabilityDescriptor,
+    CapabilityManifest,
+    TaskRequirement,
+)
+from app.db.models import HarnessAgentLoopRecord, ModelConfig
 from app.llm.client import _fit_request_messages
 
 
@@ -544,3 +555,374 @@ def test_fit_request_messages_keeps_mixed_legacy_and_acp_summaries() -> None:
     assert fitted[1]["content"].startswith(MEDIUM_SUMMARY_PREFIX)
     assert fitted[2]["content"].startswith(LONG_SUMMARY_PREFIX)
     assert fitted[-1]["content"] == "最后一条"
+
+
+# -- residual-fix regression tests ----------------------------------------
+
+
+def _memory_db():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine)
+    return engine
+
+
+def _acp_requirement() -> TaskRequirement:
+    available: list[CapabilityDescriptor] = [
+        CapabilityDescriptor(
+            capability_id="allowed",
+            name="allowed.tool",
+            kind="tool",
+        ),
+        *_acp_capability_descriptors(),
+    ]
+    return TaskRequirement(
+        task_frame_id="task-1",
+        kind="conversation",
+        goal="查询物流",
+        requirements=["查询 ORDER-1 的物流"],
+        capability_manifest=CapabilityManifest(available=available),
+    )
+
+
+def _model_config() -> ModelConfig:
+    return ModelConfig(
+        id="model-test",
+        tenant_id="tenant-demo",
+        name="测试模型",
+        api_key_encrypted="test",
+        model="test-model",
+    )
+
+
+def _fake_llm(monkeypatch, actions):
+    class FakeLLMClient:
+        def __init__(self, _model_config: ModelConfig, session_id: str | None = None):
+            pass
+
+        def generate_json(
+            self, system_prompt: str, payload: dict[str, object]
+        ) -> dict[str, object]:
+            return next(actions)
+
+    monkeypatch.setattr("app.core.harness_agent.LLMClient", FakeLLMClient)
+
+
+def _tool_invoke():
+    def invoke_tool(name: str, arguments: dict[str, object]) -> dict[str, object]:
+        return {
+            "success": True,
+            "data": {"status": "in_transit", "note": "ORDER-1 已发货"},
+        }
+
+    return invoke_tool
+
+
+def test_acp_ops_persist_execute_clear_full_chain() -> None:
+    """Model acp_ops -> loop_checkpoint -> next turn pending -> execute -> clear."""
+    engine = _memory_db()
+    with Session(engine) as db:
+        loop = HarnessAgentLoopRecord(
+            tenant_id="tenant_test",
+            session_id="session_1",
+            loop_key="general:session_1",
+            kind="general",
+            status="active",
+            checkpoint_json={
+                "acp_ops": [
+                    {"compress": {"seq_start": 0, "seq_end": 1, "summary": "前两条摘要"}}
+                ]
+            },
+        )
+        db.add(loop)
+        db.commit()
+        db.refresh(loop)
+
+        agent_loop = AgentLoop.__new__(AgentLoop)
+        agent_loop.db = db
+        chat_session = SimpleNamespace(
+            id="session_1",
+            tenant_id="tenant_test",
+            agent_id=None,
+            context_state_json=None,
+        )
+        context = agent_loop._acp_conversation_context(
+            chat_session,
+            [
+                {"id": "m1", "role": "user", "content": "第一条"},
+                {"id": "m2", "role": "assistant", "content": "第二条"},
+                {"id": "m3", "role": "user", "content": "第三条"},
+            ],
+            model_config=None,
+        )
+        db.commit()
+        db.refresh(loop)
+
+        assert context["messages"][0]["content"].startswith(LONG_SUMMARY_PREFIX)
+        assert context["messages"][1]["content"] == "第三条"
+        assert "acp_ops" not in loop.checkpoint_json
+        next_acp = context["context_state"]["acp"]
+        assert len(next_acp["checkpoints"]) == 1
+        assert next_acp["compacted_message_ids"] == ["m1", "m2"]
+
+
+def test_acp_ops_invalid_arguments_return_structured_errors() -> None:
+    engine = AcpEngine()
+    engine.add_messages([("m1", "第一条"), ("m2", "第二条")])
+
+    results, ok = _execute_acp_ops(
+        engine, [{"compress": {"seq_start": "abc", "seq_end": 1, "summary": "x"}}]
+    )
+    assert ok is False
+    assert results[0]["success"] is False
+    assert results[0]["error"]["code"] == "INVALID_ARGUMENTS"
+
+    results, ok = _execute_acp_ops(
+        engine, [{"compress": {"seq_start": 0, "summary": "x"}}]
+    )
+    assert results[0]["error"]["code"] == "INVALID_ARGUMENTS"
+
+    results, ok = _execute_acp_ops(engine, [{"decompress": {"block_id": "x"}}])
+    assert results[0]["error"]["code"] == "INVALID_ARGUMENTS"
+
+    results, ok = _execute_acp_ops(engine, [{"decompress": {}}])
+    assert results[0]["error"]["code"] == "INVALID_ARGUMENTS"
+
+    for bad_top_k in (0, 101, "5", True):
+        results, ok = _execute_acp_ops(
+            engine, [{"search_context": {"query": "q", "top_k": bad_top_k}}]
+        )
+        assert results[0]["error"]["code"] == "INVALID_ARGUMENTS"
+
+    results, ok = _execute_acp_ops(
+        engine, [{"search_context": {"query": "q", "top_k": 5}}]
+    )
+    assert ok is True
+    assert results[0]["success"] is True
+
+
+def test_acp_ops_partial_failure_keeps_successful_mutations() -> None:
+    engine = AcpEngine()
+    engine.add_messages([("m1", "第一条"), ("m2", "第二条"), ("m3", "第三条")])
+
+    results, ok = _execute_acp_ops(
+        engine,
+        [
+            {"compress": {"seq_start": 0, "seq_end": 1, "summary": "前两条摘要"}},
+            {"compress": {"seq_start": 99, "seq_end": 100, "summary": "越界"}},
+        ],
+    )
+
+    assert ok is False
+    assert results[0]["success"] is True
+    assert results[1]["success"] is False
+    assert results[1]["error"]["code"] == "invalid_range"
+    assert len(engine.blocks()) == 2
+    assert engine.blocks()[0].is_summary is True
+    assert engine.blocks()[1].message_id == "m3"
+
+
+def test_acp_ops_partial_failure_persists_successful_mutations() -> None:
+    engine = _memory_db()
+    with Session(engine) as db:
+        loop = HarnessAgentLoopRecord(
+            tenant_id="tenant_test",
+            session_id="session_1",
+            loop_key="general:session_1",
+            kind="general",
+            status="active",
+            checkpoint_json={
+                "acp_ops": [
+                    {"compress": {"seq_start": 0, "seq_end": 1, "summary": "前两条摘要"}},
+                    {"compress": {"seq_start": 99, "seq_end": 100, "summary": "越界"}},
+                ]
+            },
+        )
+        db.add(loop)
+        db.commit()
+        db.refresh(loop)
+
+        agent_loop = AgentLoop.__new__(AgentLoop)
+        agent_loop.db = db
+        chat_session = SimpleNamespace(
+            id="session_1",
+            tenant_id="tenant_test",
+            agent_id=None,
+            context_state_json=None,
+        )
+        context = agent_loop._acp_conversation_context(
+            chat_session,
+            [
+                {"id": "m1", "role": "user", "content": "第一条"},
+                {"id": "m2", "role": "assistant", "content": "第二条"},
+                {"id": "m3", "role": "user", "content": "第三条"},
+            ],
+            model_config=None,
+        )
+        db.commit()
+        db.refresh(loop)
+
+        # Legacy fallback context, but the successful compress mutation is
+        # persisted into the acp sub-state instead of being discarded.
+        assert "acp_ops" not in loop.checkpoint_json
+        next_acp = chat_session.context_state_json["acp"]
+        assert len(next_acp["checkpoints"]) == 1
+        assert next_acp["compacted_message_ids"] == ["m1", "m2"]
+        assert context["metadata"].get("compression_mode") != "acp"
+
+
+def test_acp_ops_clear_runs_even_when_execution_raises(monkeypatch) -> None:
+    engine = _memory_db()
+    with Session(engine) as db:
+        loop = HarnessAgentLoopRecord(
+            tenant_id="tenant_test",
+            session_id="session_1",
+            loop_key="general:session_1",
+            kind="general",
+            status="active",
+            checkpoint_json={
+                "acp_ops": [
+                    {"compress": {"seq_start": 0, "seq_end": 1, "summary": "摘要"}}
+                ]
+            },
+        )
+        db.add(loop)
+        db.commit()
+        db.refresh(loop)
+
+        agent_loop = AgentLoop.__new__(AgentLoop)
+        agent_loop.db = db
+        chat_session = SimpleNamespace(
+            id="session_1",
+            tenant_id="tenant_test",
+            agent_id=None,
+            context_state_json=None,
+        )
+
+        def exploding_execute(engine, ops):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(
+            "app.core.agent_loop._execute_acp_ops", exploding_execute
+        )
+        with pytest.raises(RuntimeError):
+            agent_loop._acp_conversation_context(
+                chat_session,
+                [{"id": "m1", "role": "user", "content": "第一条"}],
+                model_config=None,
+            )
+        db.commit()
+        db.refresh(loop)
+
+        assert "acp_ops" not in loop.checkpoint_json
+
+
+def test_acp_evicted_decompress_returns_error_and_keeps_summary() -> None:
+    # Simulate a serialized state where the checkpoint's originals were
+    # evicted by the originals cap: the summary block stays visible but the
+    # checkpoint carries no original blocks.
+    state = {
+        "blocks": [
+            {
+                "block_id": 1,
+                "message_id": "acp_summary_1",
+                "content": "摘要",
+                "tier": 1,
+                "is_summary": True,
+                "checkpoint_id": 1,
+                "skip": False,
+            }
+        ],
+        "checkpoints": [
+            {
+                "checkpoint_id": 1,
+                "seq_start": 0,
+                "seq_end": 1,
+                "summary_block_id": 1,
+                "tier": 1,
+                "token_delta": 0,
+                "created_at": 0.0,
+                "originals_evicted": True,
+                "original_blocks": [],
+            }
+        ],
+        "next_block_id": 2,
+        "next_checkpoint_id": 2,
+        "ledger_balance": 0,
+        "ledger_warnings": [],
+    }
+    restored = AcpEngine()
+    _restore_acp_engine(restored, state)
+
+    results, ok = _execute_acp_ops(restored, [{"decompress": {"block_id": 1}}])
+    assert ok is False
+    assert results[0]["error"]["code"] == "CHECKPOINT_ORIGINALS_EVICTED"
+    assert restored.blocks()[0].block_id == 1
+    assert restored.blocks()[0].is_summary is True
+
+
+def test_legacy_compaction_excludes_acp_compacted_message_ids() -> None:
+    context_state = {
+        "acp": {
+            "blocks": [],
+            "checkpoints": [],
+            "compacted_message_ids": ["m1", "m2", "m3", "m4"],
+        }
+    }
+    messages = [
+        {
+            "id": f"m{index}",
+            "role": "user" if index % 2 == 0 else "assistant",
+            "content": f"内容 {index} " + "x" * 120,
+        }
+        for index in range(1, 21)
+    ]
+
+    context = build_conversation_context(
+        messages, token_budget=300, context_state=context_state
+    )
+    state = context["context_state"]
+
+    assert state["compaction_count"] == 1
+    assert state["summarized_through_message_id"] == "m9"
+    assert "内容 1" not in state["medium_term_summary"]
+    assert "内容 2" not in state["medium_term_summary"]
+    assert "内容 5" in state["medium_term_summary"]
+    assert "内容 9" in state["medium_term_summary"]
+
+
+def test_task_layer_acp_ops_export_gated_by_frame_kind(monkeypatch) -> None:
+    finish_with_ops = {
+        "action": "finish",
+        "status": "completed",
+        "reply_fragment": "完成。",
+        "task_summary": "完成。",
+        "acp_ops": {"compress": {"seq_start": 0, "seq_end": 1, "summary": "摘要"}},
+    }
+
+    _fake_llm(monkeypatch, iter([finish_with_ops]))
+    conversation_result = HarnessTaskAgent().run(
+        _acp_requirement(),
+        _model_config(),
+        _tool_invoke(),
+        max_actions=1,
+        context_compression_mode="acp",
+        frame_kind="conversation",
+    )
+    assert "acp_ops" not in conversation_result.loop_checkpoint
+
+    _fake_llm(monkeypatch, iter([finish_with_ops]))
+    sop_result = HarnessTaskAgent().run(
+        _acp_requirement(),
+        _model_config(),
+        _tool_invoke(),
+        max_actions=1,
+        context_compression_mode="acp",
+        frame_kind="sop",
+    )
+    assert sop_result.loop_checkpoint["acp_ops"] == [
+        {"compress": {"seq_start": 0, "seq_end": 1, "summary": "摘要"}}
+    ]

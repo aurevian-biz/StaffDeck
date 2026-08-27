@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import re
+import time
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -38,27 +39,59 @@ from app.llm.stage_protocol import (
 from app.observability.spans import current_llm_operation, llm_span_attributes, start_llm_call
 from app.security.encryption import decrypt_secret
 
-# Latest real usage observation for the ACP shadow-price meter
-# (core/acp/pricing.py). Absent usage clears it so the meter falls back to
-# its estimate path instead of reusing a stale value (issue #54).
-_last_usage_observation: dict[str, int] | None = None
+# Latest real usage observations for the ACP shadow-price meter
+# (core/acp/pricing.py), scoped per session so concurrent sessions never
+# pollute each other. Absent usage clears the entry so the meter falls back
+# to its estimate path instead of reusing a stale value (issue #54).
+_USAGE_OBSERVATION_TTL_SECONDS = 300.0
+_usage_observations: dict[str, dict[str, object]] = {}
 
 
-def _record_usage_observation(input_tokens: int | None, source_chars: int | None) -> None:
+def _record_usage_observation(
+    session_id: str | None,
+    input_tokens: int | None,
+    source_chars: int | None,
+) -> None:
     """Record the latest real usage observation for the ACP shadow-price meter."""
-    global _last_usage_observation
-    if input_tokens is None or input_tokens < 0:
-        _last_usage_observation = None
+    if not session_id:
         return
-    _last_usage_observation = {
+    if input_tokens is None or input_tokens < 0:
+        _usage_observations.pop(session_id, None)
+        return
+    _usage_observations[session_id] = {
         "input_tokens": int(input_tokens),
         "source_chars": max(1, int(source_chars or 0)),
+        "observed_at": time.time(),
     }
 
 
-def latest_llm_usage_observation() -> dict[str, int] | None:
-    """Latest real ``(input_tokens, source_chars)`` observation, or None."""
-    return _last_usage_observation
+def _touch_usage_observation(session_id: str | None) -> None:
+    """Refresh a session's observation timestamp without overwriting content."""
+    if not session_id:
+        return
+    observation = _usage_observations.get(session_id)
+    if observation is not None:
+        observation["observed_at"] = time.time()
+
+
+def latest_llm_usage_observation(session_id: str | None = None) -> dict[str, int] | None:
+    """Latest real ``(input_tokens, source_chars)`` observation for a session.
+
+    Entries older than the TTL are dropped so a session that stopped calling
+    the LLM never feeds the meter a stale observation.
+    """
+    if not session_id:
+        return None
+    observation = _usage_observations.get(session_id)
+    if observation is None:
+        return None
+    if time.time() - float(observation.get("observed_at") or 0) > _USAGE_OBSERVATION_TTL_SECONDS:
+        _usage_observations.pop(session_id, None)
+        return None
+    return {
+        "input_tokens": int(observation["input_tokens"]),
+        "source_chars": int(observation["source_chars"]),
+    }
 
 
 class LLMError(Exception):
@@ -111,7 +144,8 @@ class _CurrentStageText(str):
 
 
 class LLMClient:
-    def __init__(self, model_config: ModelConfig):
+    def __init__(self, model_config: ModelConfig, session_id: str | None = None):
+        self._session_id = session_id
         try:
             protocol = ModelApiProtocol(
                 getattr(model_config, "api_protocol", "openai_chat_completions")
@@ -282,7 +316,9 @@ class LLMClient:
                 content = _completion_message_content(completion)
                 metrics = _completion_span_metrics(completion)
                 _record_usage_observation(
-                    metrics.get("input_tokens"), request_shape.get("request_text_chars")
+                    getattr(self, "_session_id", None),
+                    metrics.get("input_tokens"),
+                    request_shape.get("request_text_chars"),
                 )
                 response_message = _observable_completion_message(completion)
                 response_payload = _observable_provider_payload(completion)
@@ -470,6 +506,7 @@ class LLMClient:
                 if emitted_text:
                     response_text = "".join(recorded_parts)
                     _record_usage_observation(
+                        getattr(self, "_session_id", None),
                         stream_usage_metrics.get("input_tokens"),
                         request_shape.get("request_text_chars"),
                     )
@@ -502,6 +539,9 @@ class LLMClient:
                         ),
                     )
                     return
+                # Empty stream: keep the session's observation fresh (TTL)
+                # without overwriting its content with a no-text response.
+                _touch_usage_observation(getattr(self, "_session_id", None))
                 span.finish(
                     provider_setup_ms=provider_setup_ms,
                     ttft_ms=None,

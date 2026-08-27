@@ -142,3 +142,109 @@ def test_ledger_never_negative_across_multiple_compressions() -> None:
         assert isinstance(restored, DecompressResult)
         assert restored.ledger_balance >= 0
     assert engine.ledger.never_negative
+
+
+def test_to_state_from_state_round_trip_preserves_engine() -> None:
+    engine = AcpEngine()
+    engine.add_messages([("m1", "alpha"), ("m2", "beta"), ("m3", "gamma")])
+    result = engine.compress(0, 1, "summary of alpha beta")
+    assert isinstance(result, CompressResult)
+    state = engine.to_state()
+
+    restored = AcpEngine()
+    restored.from_state(state)
+
+    assert [block.message_id for block in restored.blocks()] == [
+        "acp_summary_1",
+        "m3",
+    ]
+    assert restored.blocks()[0].is_summary is True
+    assert restored.blocks()[0].checkpoint_id == 1
+    assert restored._store.next_id() == engine._store.next_id()
+    assert restored._checkpoints.next_id() == engine._checkpoints.next_id()
+    assert restored.ledger.balance == engine.ledger.balance
+    checkpoint = restored._checkpoints.get(1)
+    assert checkpoint is not None
+    assert [block.content for block in checkpoint.original_blocks] == ["alpha", "beta"]
+    decompressed = restored.decompress(result.summary_block_id)
+    assert isinstance(decompressed, DecompressResult)
+    assert [block.content for block in restored.blocks()] == ["alpha", "beta", "gamma"]
+
+
+def test_to_state_max_originals_evicts_old_checkpoint_originals() -> None:
+    engine = AcpEngine()
+    engine.add_messages([(f"m{i}", f"content {i}") for i in range(8)])
+    for index in range(3):
+        result = engine.compress(0, 1, f"summary {index}")
+        assert isinstance(result, CompressResult)
+
+    state = engine.to_state(max_originals=2)
+    checkpoints = state["checkpoints"]
+    assert len(checkpoints) == 3
+    assert checkpoints[0]["originals_evicted"] is True
+    assert checkpoints[0]["original_blocks"] == []
+    assert checkpoints[1]["originals_evicted"] is False
+    assert len(checkpoints[1]["original_blocks"]) == 2
+    assert checkpoints[2]["originals_evicted"] is False
+    assert len(checkpoints[2]["original_blocks"]) == 2
+
+    restored = AcpEngine()
+    restored.from_state(state)
+    assert restored._checkpoints.get(1).original_blocks == ()
+    assert len(restored._checkpoints.get(3).original_blocks) == 2
+
+
+def test_decompress_evicted_checkpoint_returns_error_and_keeps_summary() -> None:
+    # Simulate a serialized state where the checkpoint's originals were
+    # evicted by the originals cap: the summary block stays visible but the
+    # checkpoint carries no original blocks.
+    state = {
+        "blocks": [
+            {
+                "block_id": 1,
+                "message_id": "acp_summary_1",
+                "content": "摘要",
+                "tier": 1,
+                "is_summary": True,
+                "checkpoint_id": 1,
+                "skip": False,
+            }
+        ],
+        "checkpoints": [
+            {
+                "checkpoint_id": 1,
+                "seq_start": 0,
+                "seq_end": 1,
+                "summary_block_id": 1,
+                "tier": 1,
+                "token_delta": 0,
+                "created_at": 0.0,
+                "originals_evicted": True,
+                "original_blocks": [],
+            }
+        ],
+        "next_block_id": 2,
+        "next_checkpoint_id": 2,
+        "ledger_balance": 0,
+        "ledger_warnings": [],
+    }
+    restored = AcpEngine()
+    restored.from_state(state)
+
+    result = restored.decompress(1)
+    assert isinstance(result, AcpError)
+    assert result.code == "CHECKPOINT_ORIGINALS_EVICTED"
+    assert restored.blocks()[0].block_id == 1
+    assert restored.blocks()[0].is_summary is True
+
+
+def test_to_state_is_json_serializable() -> None:
+    import json
+
+    engine = AcpEngine()
+    engine.add_messages([("m1", "alpha"), ("m2", "beta")])
+    engine.compress(0, 1, "summary")
+    state = engine.to_state(max_originals=1)
+    round_tripped = json.loads(json.dumps(state))
+    assert round_tripped["blocks"][0]["is_summary"] is True
+    assert round_tripped["checkpoints"][0]["originals_evicted"] is False

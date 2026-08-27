@@ -59,7 +59,7 @@ def _acp_requirement(*, include_acp: bool = True) -> TaskRequirement:
 
 def _fake_llm(monkeypatch, actions, payloads: list | None = None):
     class FakeLLMClient:
-        def __init__(self, _model_config: ModelConfig):
+        def __init__(self, _model_config: ModelConfig, session_id: str | None = None):
             pass
 
         def generate_json(

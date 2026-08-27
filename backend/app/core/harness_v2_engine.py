@@ -557,6 +557,11 @@ class HarnessV2Engine:
                 continue
 
             last_skill = active_skill or last_skill
+            session_nudge = (
+                conversation_context.get("nudge")
+                if isinstance(conversation_context, dict)
+                else None
+            )
             combined, step_result = self._run_frame(
                 execution_request,
                 session,
@@ -570,6 +575,9 @@ class HarnessV2Engine:
                     *self.store.referenced_session_results(row),
                 ],
                 remaining_turn_actions,
+                session_nudge=(
+                    dict(session_nudge) if isinstance(session_nudge, dict) else None
+                ),
             )
             remaining_turn_actions = max(
                 0,
@@ -770,6 +778,7 @@ class HarnessV2Engine:
         memory_context: list[dict[str, object]],
         prior_frame_results: list[dict[str, Any]],
         max_actions: int,
+        session_nudge: dict[str, Any] | None = None,
     ) -> tuple[TaskExecutionResult, StepAgentResult]:
         self.store.mark_running(row)
         # Same preference chain as the session layer (U4): the owner resolves
@@ -971,6 +980,9 @@ class HarnessV2Engine:
                 checkpoint=loop_checkpoint,
                 context_compression_mode=context_compression_mode,
                 acp_config=acp_config,
+                session_id=session.id,
+                frame_kind=frame.kind,
+                session_acp_nudge=session_nudge,
             )
             deferred_continuation = False
             if frame.kind == "sop":

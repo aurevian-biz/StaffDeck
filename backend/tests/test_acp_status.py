@@ -65,3 +65,5 @@ def test_status_surfaces_ledger_warnings() -> None:
     engine.decompress(result.summary_block_id)
     status = engine.status()
     assert status.ledger_balance >= 0
+    assert status.ledger_warnings
+    assert any("clamped" in warning for warning in status.ledger_warnings)

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlmodel import Session
 
 from app import paths
@@ -75,6 +75,18 @@ class UIConfigUpdateRequest(BaseModel):
     acp_nudge_max_pct: float = Field(default=0.70, ge=0.0, le=1.0)
     acp_nudge_emergency_pct: float = Field(default=0.85, ge=0.0, le=1.0)
     acp_nudge_min_pct: float = Field(default=0.45, ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def _validate_acp_threshold_order(self) -> "UIConfigUpdateRequest":
+        if not (
+            0.0
+            <= self.acp_nudge_min_pct
+            <= self.acp_nudge_max_pct
+            <= self.acp_nudge_emergency_pct
+            <= 1.0
+        ):
+            raise ValueError("ACP 阈值必须满足 0 ≤ min ≤ max ≤ emergency ≤ 1")
+        return self
 
 
 def ui_config_read(row: UIConfig, *, restart_scheduled: bool = False) -> UIConfigRead:

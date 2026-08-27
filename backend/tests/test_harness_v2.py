@@ -779,7 +779,7 @@ def test_turn_planner_retries_schema_invalid_json(monkeypatch) -> None:
     )
 
     class FakeLLMClient:
-        def __init__(self, _model_config: ModelConfig):
+        def __init__(self, _model_config: ModelConfig, session_id: str | None = None):
             pass
 
         def generate_json(
@@ -822,7 +822,7 @@ def test_turn_planner_exposes_sops_but_not_runtime_capabilities(monkeypatch) -> 
     payloads: list[dict[str, object]] = []
 
     class FakeLLMClient:
-        def __init__(self, _model_config: ModelConfig):
+        def __init__(self, _model_config: ModelConfig, session_id: str | None = None):
             pass
 
         def generate_json(
@@ -2905,7 +2905,7 @@ def test_harness_agent_enforces_tool_allowlist_and_keeps_an_isolated_transcript(
     )
 
     class FakeLLMClient:
-        def __init__(self, _model_config: ModelConfig):
+        def __init__(self, _model_config: ModelConfig, session_id: str | None = None):
             pass
 
         def generate_json(
@@ -3011,7 +3011,7 @@ def test_harness_agent_adapts_bare_json_after_loading_general_skill(
     )
 
     class FakeLLMClient:
-        def __init__(self, _model_config: ModelConfig):
+        def __init__(self, _model_config: ModelConfig, session_id: str | None = None):
             pass
 
         def generate_json(self, _system_prompt, _payload):
@@ -3095,7 +3095,7 @@ def test_harness_agent_does_not_adapt_bare_json_without_loaded_general_skill(
     monkeypatch,
 ) -> None:
     class FakeLLMClient:
-        def __init__(self, _model_config: ModelConfig):
+        def __init__(self, _model_config: ModelConfig, session_id: str | None = None):
             pass
 
         def generate_json(self, _system_prompt, _payload):
@@ -3150,7 +3150,7 @@ def test_harness_agent_repairs_invalid_tool_action_envelope_once(
     )
 
     class FakeLLMClient:
-        def __init__(self, _model_config: ModelConfig):
+        def __init__(self, _model_config: ModelConfig, session_id: str | None = None):
             pass
 
         def generate_json(self, _system_prompt, payload):
@@ -3225,7 +3225,7 @@ def test_harness_agent_executes_consecutive_json_actions_in_order(
     )
 
     class FakeLLMClient:
-        def __init__(self, _model_config: ModelConfig):
+        def __init__(self, _model_config: ModelConfig, session_id: str | None = None):
             pass
 
         def generate_json_sequence(self, _system_prompt, _payload):
@@ -3349,7 +3349,7 @@ def test_harness_agent_blocks_repeated_non_retryable_action(
     )
 
     class FakeLLMClient:
-        def __init__(self, _model_config: ModelConfig):
+        def __init__(self, _model_config: ModelConfig, session_id: str | None = None):
             pass
 
         def generate_json(self, _system_prompt, _payload):
@@ -3420,7 +3420,7 @@ def test_harness_agent_does_not_restore_non_retryable_failures_from_checkpoint(
     )
 
     class FakeLLMClient:
-        def __init__(self, _model_config: ModelConfig):
+        def __init__(self, _model_config: ModelConfig, session_id: str | None = None):
             pass
 
         def generate_json(self, _system_prompt, _payload):
@@ -3490,7 +3490,7 @@ def test_harness_agent_activates_described_capability_for_current_revision(
     )
 
     class FakeLLMClient:
-        def __init__(self, _model_config: ModelConfig):
+        def __init__(self, _model_config: ModelConfig, session_id: str | None = None):
             pass
 
         def generate_json(self, _system_prompt, _payload):
@@ -3595,7 +3595,7 @@ def test_harness_agent_keeps_knowledge_results_and_citations_linked(
     )
 
     class FakeLLMClient:
-        def __init__(self, _model_config: ModelConfig):
+        def __init__(self, _model_config: ModelConfig, session_id: str | None = None):
             pass
 
         def generate_json(
@@ -3696,7 +3696,7 @@ def test_harness_agent_limits_successful_knowledge_searches_to_two(
     )
 
     class FakeLLMClient:
-        def __init__(self, _model_config: ModelConfig):
+        def __init__(self, _model_config: ModelConfig, session_id: str | None = None):
             pass
 
         def generate_json(
@@ -3793,7 +3793,7 @@ def test_harness_agent_projects_only_validated_current_turn_images(
     payloads: list[dict[str, object]] = []
 
     class FakeLLMClient:
-        def __init__(self, _model_config: ModelConfig):
+        def __init__(self, _model_config: ModelConfig, session_id: str | None = None):
             pass
 
         def generate_json(
@@ -3906,7 +3906,7 @@ def test_harness_agent_drops_tampered_image_data_url(
     payloads: list[dict[str, object]] = []
 
     class FakeLLMClient:
-        def __init__(self, _model_config: ModelConfig):
+        def __init__(self, _model_config: ModelConfig, session_id: str | None = None):
             pass
 
         def generate_json(
@@ -3985,7 +3985,7 @@ def test_harness_agent_cannot_skip_required_sop_tool(
     payloads: list[dict[str, object]] = []
 
     class FakeLLMClient:
-        def __init__(self, _model_config: ModelConfig):
+        def __init__(self, _model_config: ModelConfig, session_id: str | None = None):
             pass
 
         def generate_json(
@@ -4064,7 +4064,7 @@ def test_harness_agent_requires_the_configured_knowledge_base(monkeypatch) -> No
     )
 
     class FakeLLMClient:
-        def __init__(self, _model_config: ModelConfig):
+        def __init__(self, _model_config: ModelConfig, session_id: str | None = None):
             pass
 
         def generate_json(
@@ -4334,7 +4334,7 @@ def test_harness_agent_checkpoint_restores_transcript_across_activation(
     )
 
     class FakeLLMClient:
-        def __init__(self, _model_config: ModelConfig):
+        def __init__(self, _model_config: ModelConfig, session_id: str | None = None):
             pass
 
         def generate_json(

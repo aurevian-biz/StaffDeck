@@ -251,4 +251,72 @@ describe('RuntimeSettingsPage 上下文压缩机制', () => {
     expect((screen.getByLabelText(/紧急压缩触发阈值/) as HTMLInputElement).disabled).toBe(true);
     expect((screen.getByLabelText(/最低压缩触发阈值/) as HTMLInputElement).disabled).toBe(true);
   });
+
+  it('rejects an empty ACP threshold input with an error toast and no PUT', async () => {
+    const user = userEvent.setup();
+    const fetchMock = makeFetchMock(makeUiConfig({ context_compression_mode: 'acp' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+
+    const limitInput = (await screen.findByLabelText(/上下文上限/)) as HTMLInputElement;
+    await user.clear(limitInput);
+    await user.click(screen.getByRole('button', { name: '保存设置' }));
+
+    await waitFor(() => expect(toastMock.custom).toHaveBeenCalled());
+    const puts = fetchMock.mock.calls.filter(([, init]) => init?.method === 'PUT');
+    expect(puts).toHaveLength(0);
+  });
+
+  it('rejects an out-of-range ratio with an error toast and no PUT', async () => {
+    const user = userEvent.setup();
+    const fetchMock = makeFetchMock(makeUiConfig({ context_compression_mode: 'acp' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+
+    const maxPctInput = (await screen.findByLabelText(/常规压缩触发阈值/)) as HTMLInputElement;
+    await user.clear(maxPctInput);
+    await user.type(maxPctInput, '1.5');
+    await user.click(screen.getByRole('button', { name: '保存设置' }));
+
+    await waitFor(() => expect(toastMock.custom).toHaveBeenCalled());
+    const puts = fetchMock.mock.calls.filter(([, init]) => init?.method === 'PUT');
+    expect(puts).toHaveLength(0);
+  });
+
+  it('rejects a context limit below 1 with an error toast and no PUT', async () => {
+    const user = userEvent.setup();
+    const fetchMock = makeFetchMock(makeUiConfig({ context_compression_mode: 'acp' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+
+    const limitInput = (await screen.findByLabelText(/上下文上限/)) as HTMLInputElement;
+    await user.clear(limitInput);
+    await user.type(limitInput, '0');
+    await user.click(screen.getByRole('button', { name: '保存设置' }));
+
+    await waitFor(() => expect(toastMock.custom).toHaveBeenCalled());
+    const puts = fetchMock.mock.calls.filter(([, init]) => init?.method === 'PUT');
+    expect(puts).toHaveLength(0);
+  });
+
+  it('rejects threshold ratios out of order with an error toast and no PUT', async () => {
+    const user = userEvent.setup();
+    const fetchMock = makeFetchMock(makeUiConfig({ context_compression_mode: 'acp' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+
+    // 最低阈值 0.9 > 常规阈值 0.7，违反 最低 <= 常规 <= 紧急
+    const minPctInput = (await screen.findByLabelText(/最低压缩触发阈值/)) as HTMLInputElement;
+    await user.clear(minPctInput);
+    await user.type(minPctInput, '0.9');
+    await user.click(screen.getByRole('button', { name: '保存设置' }));
+
+    await waitFor(() => expect(toastMock.custom).toHaveBeenCalled());
+    const puts = fetchMock.mock.calls.filter(([, init]) => init?.method === 'PUT');
+    expect(puts).toHaveLength(0);
+  });
 });

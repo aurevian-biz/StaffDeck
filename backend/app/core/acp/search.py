@@ -137,7 +137,9 @@ def search_blocks(
         if hidden_score > visible_score:
             score, terms, source, snippet_text = hidden_score, hidden_terms, "hidden", hidden
         else:
-            score, terms, source, snippet_text = visible_score, visible_terms, "visible", block.content
+            score, terms, source, snippet_text = (
+                visible_score, visible_terms, "visible", block.content
+            )
         matched = tuple(sorted(term for term in query_terms if terms[term] > 0))
         hits.append(
             SearchHit(

@@ -12,8 +12,6 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app import paths
 from app.core.acp import AcpConfig, AcpEngine, AcpError
-from app.core.acp.blocks import Block
-from app.core.acp.checkpoint import CheckpointRecord
 from app.core.acp.pricing import RealUsageMeter, TokenMeter
 from app.core.harness_attachments import (
     ValidatedTaskImagePayload,
@@ -41,6 +39,9 @@ CancellationCheck = Callable[[], bool]
 ACP_CAPABILITY_NAMES = frozenset(
     {"acp_compress", "acp_decompress", "acp_search_context", "acp_status"}
 )
+# Mirror the session-layer originals cap so the task-level checkpoint state
+# cannot grow unboundedly with compression count either.
+ACP_CHECKPOINT_ORIGINALS_CAP = 5
 # compress/decompress mutate the transcript in place (summary entry replaces
 # the compressed range / restored entries replace the summary entry), so the
 # regular assistant+tool append is skipped for them.
@@ -92,6 +93,9 @@ class HarnessTaskAgent:
         checkpoint: dict[str, Any] | None = None,
         context_compression_mode: str | None = None,
         acp_config: AcpConfig | None = None,
+        session_id: str | None = None,
+        frame_kind: str | None = None,
+        session_acp_nudge: dict[str, Any] | None = None,
     ) -> TaskExecutionResult:
         max_actions = max(1, min(int(max_actions), 100))
         checkpoint = dict(checkpoint or {})
@@ -131,7 +135,13 @@ class HarnessTaskAgent:
             checkpoint.get("recent_task_summaries")
         )[-8:]
         acp_mode = (context_compression_mode or self._context_compression_mode) == "acp"
-        acp_meter = RealUsageMeter(usage_source=latest_llm_usage_observation) if acp_mode else None
+        acp_meter = (
+            RealUsageMeter(
+                usage_source=lambda: latest_llm_usage_observation(session_id)
+            )
+            if acp_mode
+            else None
+        )
         acp_engine = (
             _acp_engine_for_transcript(
                 transcript,
@@ -185,7 +195,11 @@ class HarnessTaskAgent:
                 result.loop_checkpoint["acp_state"] = _serialize_acp_engine_state(
                     acp_engine
                 )
-            if collected_acp_ops:
+            # Task-layer acp_ops target the task transcript's sequence layout;
+            # the session layer reads the same general:{session_id} frame for
+            # conversation frames, so exporting them there would mis-index the
+            # session engine. Only non-conversation (task) frames export ops.
+            if collected_acp_ops and frame_kind != "conversation":
                 result.loop_checkpoint["acp_ops"] = list(collected_acp_ops)
             return result
 
@@ -231,6 +245,8 @@ class HarnessTaskAgent:
                 nudge = _acp_task_nudge(acp_engine, acp_meter, transcript)
                 if nudge is not None:
                     payload["acp_nudge"] = nudge
+            if session_acp_nudge:
+                payload["session_acp_nudge"] = dict(session_acp_nudge)
             if attachment_context is not None:
                 payload["conversation_context"] = attachment_context
             try:
@@ -252,6 +268,7 @@ class HarnessTaskAgent:
                             client = _deadline_llm_client(
                                 model_config,
                                 step_deadline_monotonic,
+                                session_id=session_id,
                             )
                             raw = _generate_harness_action_json(
                                 client,
@@ -874,9 +891,10 @@ def _deadline_expired(deadline_monotonic: float | None) -> bool:
 def _deadline_llm_client(
     model_config: ModelConfig,
     deadline_monotonic: float | None,
+    session_id: str | None = None,
 ) -> LLMClient:
     if deadline_monotonic is None:
-        return LLMClient(model_config)
+        return LLMClient(model_config, session_id=session_id)
     remaining = max(deadline_monotonic - time.monotonic(), 0.1)
     configured = getattr(model_config, "timeout_seconds", None)
     timeout_seconds = min(float(configured), remaining) if configured else remaining
@@ -886,7 +904,7 @@ def _deadline_llm_client(
         limited_config = model_config.model_copy(
             update={"timeout_seconds": timeout_seconds}
         )
-    return LLMClient(limited_config)
+    return LLMClient(limited_config, session_id=session_id)
 
 
 def _step_timeout_result(
@@ -1091,7 +1109,7 @@ def _acp_engine_for_transcript(
     if isinstance(acp_state, dict):
         _restore_acp_engine_state(engine, acp_state)
     if len(engine.blocks()) != len(transcript):
-        engine = AcpEngine()
+        engine = AcpEngine(config=config, meter=meter)
         _append_transcript_blocks(engine, transcript)
     return engine
 
@@ -1131,58 +1149,8 @@ def _acp_task_nudge(
 
 
 def _restore_acp_engine_state(engine: AcpEngine, acp_state: dict[str, Any]) -> None:
-    blocks = acp_state.get("blocks")
-    if isinstance(blocks, list):
-        restored = [
-            Block(
-                block_id=int(raw.get("block_id") or 0),
-                message_id=str(raw.get("message_id") or ""),
-                content=str(raw.get("content") or ""),
-                tier=int(raw.get("tier") or 1),
-                is_summary=bool(raw.get("is_summary")),
-                checkpoint_id=raw.get("checkpoint_id"),
-                skip=bool(raw.get("skip")),
-            )
-            for raw in blocks
-            if isinstance(raw, dict)
-        ]
-        engine._store._blocks = restored
-        engine._store._next_id = max((block.block_id for block in restored), default=0) + 1
-    checkpoints = acp_state.get("checkpoints")
-    if isinstance(checkpoints, list):
-        records: dict[int, CheckpointRecord] = {}
-        for raw in checkpoints:
-            if not isinstance(raw, dict):
-                continue
-            checkpoint_id = int(raw.get("checkpoint_id") or 0)
-            originals = tuple(
-                Block(
-                    block_id=int(item.get("block_id") or 0),
-                    message_id=str(item.get("message_id") or ""),
-                    content=str(item.get("content") or ""),
-                    tier=int(item.get("tier") or 1),
-                    is_summary=bool(item.get("is_summary")),
-                    checkpoint_id=item.get("checkpoint_id"),
-                    skip=bool(item.get("skip")),
-                )
-                for item in raw.get("original_blocks") or []
-                if isinstance(item, dict)
-            )
-            records[checkpoint_id] = CheckpointRecord(
-                checkpoint_id=checkpoint_id,
-                seq_start=int(raw.get("seq_start") or 0),
-                seq_end=int(raw.get("seq_end") or 0),
-                summary_block_id=int(raw.get("summary_block_id") or 0),
-                tier=int(raw.get("tier") or 1),
-                original_blocks=originals,
-                token_delta=int(raw.get("token_delta") or 0),
-                created_at=float(raw.get("created_at") or 0.0),
-            )
-        engine._checkpoints._records = records
-        engine._checkpoints._next_id = max(records, default=0) + 1
-    balance = acp_state.get("ledger_balance")
-    if isinstance(balance, int):
-        engine._ledger._balance = max(0, balance)
+    """Rebuild the task-level kernel from the persisted acp sub-state."""
+    engine.from_state(acp_state)
 
 
 def _serialize_acp_engine_state(engine: AcpEngine) -> dict[str, Any]:
@@ -1190,49 +1158,10 @@ def _serialize_acp_engine_state(engine: AcpEngine) -> dict[str, Any]:
 
     Every block content is the serialized transcript entry itself, so no
     separate roles/ingested-id bookkeeping is needed (unlike the session
-    layer). Checkpoint originals are kept in full so decompress stays
-    recoverable across turns.
+    layer). Checkpoint originals are capped like the session layer so the
+    checkpoint state cannot grow unboundedly with compression count.
     """
-    return {
-        "blocks": [
-            {
-                "block_id": block.block_id,
-                "message_id": block.message_id,
-                "content": block.content,
-                "tier": block.tier,
-                "is_summary": block.is_summary,
-                "checkpoint_id": block.checkpoint_id,
-                "skip": block.skip,
-            }
-            for block in engine.blocks()
-        ],
-        "checkpoints": [
-            {
-                "checkpoint_id": record.checkpoint_id,
-                "seq_start": record.seq_start,
-                "seq_end": record.seq_end,
-                "summary_block_id": record.summary_block_id,
-                "tier": record.tier,
-                "token_delta": record.token_delta,
-                "created_at": record.created_at,
-                "original_blocks": [
-                    {
-                        "block_id": block.block_id,
-                        "message_id": block.message_id,
-                        "content": block.content,
-                        "tier": block.tier,
-                        "is_summary": block.is_summary,
-                        "checkpoint_id": block.checkpoint_id,
-                        "skip": block.skip,
-                    }
-                    for block in record.original_blocks
-                ],
-            }
-            for record in engine._checkpoints.all()
-        ],
-        "ledger_balance": engine.ledger.balance,
-        "ledger_warnings": list(engine.ledger.warnings),
-    }
+    return engine.to_state(max_originals=ACP_CHECKPOINT_ORIGINALS_CAP)
 
 
 def _append_transcript_blocks(

@@ -41,7 +41,16 @@ def build_conversation_context(
         # Skip already-summarized messages (legacy or ACP summary blocks
         # carrying the shared prefixes) so they are never destructively
         # re-summarized when a session switches back to legacy (plan fix F8).
-        older = [message for message in older if not _is_summary_message(message)]
+        # ACP-compressed message ids are excluded too: their content already
+        # lives in ACP summary blocks, so re-summarizing the raw rows would
+        # duplicate the compression work (plan fix F8).
+        compacted_ids = _acp_compacted_message_ids(state)
+        older = [
+            message
+            for message in older
+            if not _is_summary_message(message)
+            and message["_message_id"] not in compacted_ids
+        ]
         if older:
             previous_history = _joined_existing_history(state)
             state["long_term_summary"] = _summarize(
@@ -305,6 +314,17 @@ def _is_summary_message(message: dict[str, Any]) -> bool:
     return str(message.get("content") or "").startswith(
         (LONG_SUMMARY_PREFIX, MEDIUM_SUMMARY_PREFIX)
     )
+
+
+def _acp_compacted_message_ids(state: dict[str, Any]) -> set[str]:
+    """Message ids already covered by ACP summary blocks in the acp sub-state."""
+    acp_state = state.get("acp")
+    if not isinstance(acp_state, dict):
+        return set()
+    raw = acp_state.get("compacted_message_ids")
+    if not isinstance(raw, list):
+        return set()
+    return {str(item) for item in raw if str(item)}
 
 
 def _recent_rounds(

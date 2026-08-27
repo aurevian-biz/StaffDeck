@@ -323,3 +323,30 @@ def test_acp_enabled_flag_in_get_response(monkeypatch: pytest.MonkeyPatch) -> No
     result = ui_config_read(UIConfig(tenant_id="tenant_demo"))
 
     assert result.acp_enabled is True
+
+
+def test_acp_threshold_order_is_validated() -> None:
+    with pytest.raises(ValidationError):
+        UIConfigUpdateRequest(
+            tenant_id="tenant_demo",
+            acp_nudge_min_pct=0.80,
+            acp_nudge_max_pct=0.70,
+        )
+    with pytest.raises(ValidationError):
+        UIConfigUpdateRequest(
+            tenant_id="tenant_demo",
+            acp_nudge_max_pct=0.90,
+            acp_nudge_emergency_pct=0.85,
+        )
+    with pytest.raises(ValidationError):
+        UIConfigUpdateRequest(
+            tenant_id="tenant_demo",
+            acp_nudge_emergency_pct=1.5,
+        )
+    request = UIConfigUpdateRequest(
+        tenant_id="tenant_demo",
+        acp_nudge_min_pct=0.30,
+        acp_nudge_max_pct=0.70,
+        acp_nudge_emergency_pct=0.85,
+    )
+    assert request.acp_nudge_max_pct == 0.70

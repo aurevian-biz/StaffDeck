@@ -3252,5 +3252,8 @@
   "确认保存": "Confirm Save",
   "切换上下文压缩机制？": "Switch context compression mechanism?",
   "该偏好将应用于当前租户的全部会话，旧上下文将按新机制处理。": "This preference applies to all sessions of the current tenant; existing context will be processed under the new mechanism.",
-  "反思轮数、单轮最大动作数与 ACP 阈值必须是数字": "Reflection rounds, maximum actions per turn, and ACP thresholds must be numbers."
+  "反思轮数、单轮最大动作数与 ACP 阈值必须是数字": "Reflection rounds, maximum actions per turn, and ACP thresholds must be numbers.",
+  "上下文上限不能小于 1": "Context window limit cannot be less than 1.",
+  "压缩触发阈值必须在 0 到 1 之间": "Compression trigger ratios must be between 0 and 1.",
+  "常规压缩触发阈值不能高于紧急压缩触发阈值，最低压缩触发阈值不能高于常规压缩触发阈值": "The regular compression trigger ratio cannot exceed the emergency ratio, and the minimum ratio cannot exceed the regular ratio."
 }

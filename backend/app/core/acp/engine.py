@@ -8,7 +8,7 @@ compression ledger.
 
 import time
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Any, Sequence
 
 from .blocks import Block, BlockStore
 from .checkpoint import CheckpointRecord, CheckpointStore
@@ -90,7 +90,9 @@ class AcpEngine:
 
     # -- operations ----------------------------------------------------
 
-    def compress(self, seq_start: int, seq_end: int, summary_text: str) -> CompressResult | AcpError:
+    def compress(
+        self, seq_start: int, seq_end: int, summary_text: str
+    ) -> CompressResult | AcpError:
         """Replace the block range ``[seq_start, seq_end]`` with a summary.
 
         The summary text is provided by the caller (the model); the kernel
@@ -184,6 +186,17 @@ class AcpEngine:
                 message=f"checkpoint {block.checkpoint_id} missing",
                 detail={"checkpoint_id": block.checkpoint_id},
             )
+        if not record.original_blocks:
+            # Evicted originals (serialization cap) must never be replaced
+            # with nothing: that would silently delete the visible summary.
+            return AcpError(
+                code="CHECKPOINT_ORIGINALS_EVICTED",
+                message=(
+                    f"checkpoint {record.checkpoint_id} originals were evicted; "
+                    "decompress unavailable"
+                ),
+                detail={"checkpoint_id": record.checkpoint_id, "block_id": block_id},
+            )
         removed = self._store.replace_by_id(block_id, record.original_blocks)
         assert removed is not None
         restored_tokens = self._ledger.estimate(
@@ -267,6 +280,136 @@ class AcpEngine:
     def nudge(self, current_tokens: int) -> NudgeRecommendation | None:
         """Evaluate context pressure; advisory only, never mandatory."""
         return evaluate_pressure(current_tokens, self._config)
+
+    # -- persistence ----------------------------------------------------
+
+    def to_state(self, *, max_originals: int | None = None) -> dict[str, Any]:
+        """Serialize the kernel state into a JSON-safe dict.
+
+        ``max_originals`` bounds how many most-recent checkpoints keep their
+        original blocks; older checkpoints keep index metadata with empty
+        originals (``originals_evicted=True``). ``None`` keeps all originals.
+        """
+        checkpoints = self._checkpoints.all()
+        evicted = (
+            set(checkpoints[:-max_originals]) if max_originals is not None else set()
+        )
+        return {
+            "blocks": [
+                {
+                    "block_id": block.block_id,
+                    "message_id": block.message_id,
+                    "content": block.content,
+                    "tier": block.tier,
+                    "is_summary": block.is_summary,
+                    "checkpoint_id": block.checkpoint_id,
+                    "skip": block.skip,
+                }
+                for block in self._store.all()
+            ],
+            "checkpoints": [
+                {
+                    "checkpoint_id": record.checkpoint_id,
+                    "seq_start": record.seq_start,
+                    "seq_end": record.seq_end,
+                    "summary_block_id": record.summary_block_id,
+                    "tier": record.tier,
+                    "token_delta": record.token_delta,
+                    "created_at": record.created_at,
+                    "originals_evicted": record in evicted,
+                    "original_blocks": [
+                        {
+                            "block_id": block.block_id,
+                            "message_id": block.message_id,
+                            "content": block.content,
+                            "tier": block.tier,
+                            "is_summary": block.is_summary,
+                            "checkpoint_id": block.checkpoint_id,
+                            "skip": block.skip,
+                        }
+                        for block in record.original_blocks
+                    ]
+                    if record not in evicted
+                    else [],
+                }
+                for record in checkpoints
+            ],
+            "next_block_id": self._store.next_id(),
+            "next_checkpoint_id": self._checkpoints.next_id(),
+            "ledger_balance": self._ledger.balance,
+            "ledger_warnings": list(self._ledger.warnings),
+        }
+
+    def from_state(self, state: dict[str, Any]) -> None:
+        """Restore the kernel state from a ``to_state`` dict, in place.
+
+        Block ids are preserved so model-issued decompress references stay
+        valid across turns. Checkpoints whose originals were evicted restore
+        with empty ``original_blocks``; decompress then refuses with
+        ``CHECKPOINT_ORIGINALS_EVICTED`` instead of deleting the summary.
+        """
+        blocks = state.get("blocks")
+        if isinstance(blocks, list):
+            restored = [
+                Block(
+                    block_id=int(raw.get("block_id") or 0),
+                    message_id=str(raw.get("message_id") or ""),
+                    content=str(raw.get("content") or ""),
+                    tier=int(raw.get("tier") or 1),
+                    is_summary=bool(raw.get("is_summary")),
+                    checkpoint_id=raw.get("checkpoint_id"),
+                    skip=bool(raw.get("skip")),
+                )
+                for raw in blocks
+                if isinstance(raw, dict)
+            ]
+            self._store._blocks = restored
+            next_block_id = state.get("next_block_id")
+            if isinstance(next_block_id, int) and next_block_id > 0:
+                self._store._next_id = next_block_id
+            else:
+                self._store._next_id = (
+                    max((block.block_id for block in restored), default=0) + 1
+                )
+        checkpoints = state.get("checkpoints")
+        if isinstance(checkpoints, list):
+            records: dict[int, CheckpointRecord] = {}
+            for raw in checkpoints:
+                if not isinstance(raw, dict):
+                    continue
+                checkpoint_id = int(raw.get("checkpoint_id") or 0)
+                originals = tuple(
+                    Block(
+                        block_id=int(item.get("block_id") or 0),
+                        message_id=str(item.get("message_id") or ""),
+                        content=str(item.get("content") or ""),
+                        tier=int(item.get("tier") or 1),
+                        is_summary=bool(item.get("is_summary")),
+                        checkpoint_id=item.get("checkpoint_id"),
+                        skip=bool(item.get("skip")),
+                    )
+                    for item in raw.get("original_blocks") or []
+                    if isinstance(item, dict)
+                )
+                records[checkpoint_id] = CheckpointRecord(
+                    checkpoint_id=checkpoint_id,
+                    seq_start=int(raw.get("seq_start") or 0),
+                    seq_end=int(raw.get("seq_end") or 0),
+                    summary_block_id=int(raw.get("summary_block_id") or 0),
+                    tier=int(raw.get("tier") or 1),
+                    original_blocks=originals,
+                    token_delta=int(raw.get("token_delta") or 0),
+                    created_at=float(raw.get("created_at") or 0.0),
+                )
+            self._checkpoints._records = records
+            next_checkpoint_id = state.get("next_checkpoint_id")
+            if isinstance(next_checkpoint_id, int) and next_checkpoint_id > 0:
+                self._checkpoints._next_id = next_checkpoint_id
+            else:
+                self._checkpoints._next_id = max(records, default=0) + 1
+        balance = state.get("ledger_balance")
+        if isinstance(balance, int):
+            self._ledger._balance = max(0, balance)
 
     # -- introspection -------------------------------------------------
 

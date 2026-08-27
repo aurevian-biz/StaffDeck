@@ -5,7 +5,6 @@ pre-check estimate as fallback, threshold crossing (normal vs emergency
 copy), and the guarantee that nudges appear only in ACP mode.
 """
 
-import json
 from copy import deepcopy
 from types import SimpleNamespace
 
@@ -66,7 +65,7 @@ def _acp_requirement(*, include_acp: bool = True) -> TaskRequirement:
 
 def _fake_llm(monkeypatch, actions, payloads: list | None = None):
     class FakeLLMClient:
-        def __init__(self, _model_config: ModelConfig):
+        def __init__(self, _model_config: ModelConfig, session_id: str | None = None):
             pass
 
         def generate_json(
@@ -190,7 +189,9 @@ def test_session_nudge_emergency_escalates() -> None:
 def test_session_context_attaches_nudge_when_real_usage_crosses_threshold(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(agent_loop_module, "latest_llm_usage_observation", lambda: HIGH_USAGE)
+    monkeypatch.setattr(
+        agent_loop_module, "latest_llm_usage_observation", lambda _session_id=None: HIGH_USAGE
+    )
     loop = AgentLoop.__new__(AgentLoop)
     loop.db = _fake_db()
     chat_session = SimpleNamespace(
@@ -210,7 +211,9 @@ def test_session_context_attaches_nudge_when_real_usage_crosses_threshold(
 
 
 def test_session_context_no_nudge_below_threshold(monkeypatch) -> None:
-    monkeypatch.setattr(agent_loop_module, "latest_llm_usage_observation", lambda: LOW_USAGE)
+    monkeypatch.setattr(
+        agent_loop_module, "latest_llm_usage_observation", lambda _session_id=None: LOW_USAGE
+    )
     loop = AgentLoop.__new__(AgentLoop)
     loop.db = _fake_db()
     chat_session = SimpleNamespace(
@@ -228,7 +231,9 @@ def test_session_context_no_nudge_below_threshold(monkeypatch) -> None:
 
 
 def test_session_stage_payload_contains_nudge_only_in_acp_mode(monkeypatch) -> None:
-    monkeypatch.setattr(agent_loop_module, "latest_llm_usage_observation", lambda: HIGH_USAGE)
+    monkeypatch.setattr(
+        agent_loop_module, "latest_llm_usage_observation", lambda _session_id=None: HIGH_USAGE
+    )
     loop = AgentLoop.__new__(AgentLoop)
     loop.db = _fake_db()
     chat_session = SimpleNamespace(
@@ -336,7 +341,7 @@ def test_task_nudge_emergency_escalates() -> None:
 
 def test_task_payload_contains_nudge_only_in_acp_mode(monkeypatch) -> None:
     monkeypatch.setattr(
-        harness_agent_module, "latest_llm_usage_observation", lambda: HIGH_USAGE
+        harness_agent_module, "latest_llm_usage_observation", lambda _session_id=None: HIGH_USAGE
     )
     payloads: list[dict[str, object]] = []
     _fake_llm(monkeypatch, iter([_finish_action()]), payloads)
@@ -363,7 +368,7 @@ def test_task_payload_contains_nudge_only_in_acp_mode(monkeypatch) -> None:
 
 def test_task_payload_no_nudge_below_threshold(monkeypatch) -> None:
     monkeypatch.setattr(
-        harness_agent_module, "latest_llm_usage_observation", lambda: LOW_USAGE
+        harness_agent_module, "latest_llm_usage_observation", lambda _session_id=None: LOW_USAGE
     )
     payloads: list[dict[str, object]] = []
     _fake_llm(monkeypatch, iter([_finish_action()]), payloads)
@@ -379,7 +384,7 @@ def test_task_payload_no_nudge_below_threshold(monkeypatch) -> None:
 
 def test_task_payload_emergency_nudge_escalates(monkeypatch) -> None:
     monkeypatch.setattr(
-        harness_agent_module, "latest_llm_usage_observation", lambda: EMERGENCY_USAGE
+        harness_agent_module, "latest_llm_usage_observation", lambda _session_id=None: EMERGENCY_USAGE
     )
     payloads: list[dict[str, object]] = []
     _fake_llm(monkeypatch, iter([_finish_action()]), payloads)
@@ -395,7 +400,9 @@ def test_task_payload_emergency_nudge_escalates(monkeypatch) -> None:
 
 
 def test_task_payload_nudge_flagged_estimated_when_usage_absent(monkeypatch) -> None:
-    monkeypatch.setattr(harness_agent_module, "latest_llm_usage_observation", lambda: None)
+    monkeypatch.setattr(
+        harness_agent_module, "latest_llm_usage_observation", lambda _session_id=None: None
+    )
     payloads: list[dict[str, object]] = []
     _fake_llm(monkeypatch, iter([_finish_action()]), payloads)
     HarnessTaskAgent().run(
@@ -411,7 +418,7 @@ def test_task_payload_nudge_flagged_estimated_when_usage_absent(monkeypatch) -> 
 def test_task_payload_nudge_does_not_block_finish(monkeypatch) -> None:
     """autoNudge semantics: the nudge is advisory and never hard-blocks."""
     monkeypatch.setattr(
-        harness_agent_module, "latest_llm_usage_observation", lambda: EMERGENCY_USAGE
+        harness_agent_module, "latest_llm_usage_observation", lambda _session_id=None: EMERGENCY_USAGE
     )
     payloads: list[dict[str, object]] = []
     _fake_llm(monkeypatch, iter([_finish_action()]), payloads)
@@ -423,4 +430,4 @@ def test_task_payload_nudge_does_not_block_finish(monkeypatch) -> None:
         context_compression_mode="acp",
     )
     assert result.status == "completed"
-    assert json.dumps(payloads[0], ensure_ascii=False)
+    assert payloads[0]["acp_nudge"]["level"] == "emergency"
