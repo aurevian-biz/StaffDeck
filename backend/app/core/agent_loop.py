@@ -20,7 +20,10 @@ from app.core.acp.nudge import NudgeRecommendation
 from app.core.acp.pricing import RealUsageMeter
 from app.core.agent_identity_prompt import AgentIdentityPrompt
 from app.core.cancellation import clear_chat_turn_cancelled
-from app.core.conversation_context import build_conversation_context
+from app.core.conversation_context import (
+    ConversationContextSettings,
+    build_conversation_context,
+)
 from app.core.conversation_projection import ConversationProjection
 from app.core.graph_rules import GraphRules
 from app.core.harness_agent import HarnessExecutionCancelled
@@ -65,8 +68,6 @@ from app.llm.model_config_resolver import (
     resolve_model_config_for_runtime,
 )
 from app.llm.stage_protocol import stage_payload, unified_system_prompt
-
-logger = logging.getLogger(__name__)
 from app.memory.jobs import enqueue_memory_capture
 from app.memory.service import MemoryService
 from app.observability import EventLog
@@ -81,6 +82,8 @@ from app.session.session_schema import (
     StepAgentResult,
 )
 from app.tools.tool_schema import ToolResult
+
+logger = logging.getLogger(__name__)
 
 STREAM_CHUNK_INTERVAL_SECONDS = 0.045
 MAX_TOOL_ACTIONS_PER_TURN = 32
@@ -1478,6 +1481,49 @@ class AgentLoop:
         value = str(row.context_compression_mode or "").strip() if row else ""
         return value if value in {"acp", "legacy"} else DEFAULT_CONTEXT_COMPRESSION_MODE
 
+    def _get_conversation_context_settings(
+        self,
+        tenant_id: str,
+    ) -> ConversationContextSettings:
+        if not hasattr(self.db, "get"):
+            return ConversationContextSettings()
+        row = self.db.get(UIConfig, tenant_id)
+        if row is None:
+            return ConversationContextSettings()
+        return ConversationContextSettings(
+            token_budget=getattr(row, "context_token_budget", 32_000),
+            compaction_trigger_ratio=getattr(
+                row,
+                "context_compaction_trigger_ratio",
+                0.70,
+            ),
+            recent_round_limit=getattr(row, "context_recent_round_limit", 6),
+            long_summary_token_budget=getattr(
+                row,
+                "context_long_summary_token_budget",
+                4_000,
+            ),
+            medium_summary_token_budget=getattr(
+                row,
+                "context_medium_summary_token_budget",
+                4_000,
+            ),
+            allowed_roles=frozenset(
+                getattr(row, "context_allowed_roles", None)
+                or {"user", "assistant"}
+            ),
+            long_summary_prefix=getattr(
+                row,
+                "context_long_summary_prefix",
+                "历史的信息可以被总结为：",
+            ),
+            medium_summary_prefix=getattr(
+                row,
+                "context_medium_summary_prefix",
+                "近期的历史信息总结为：",
+            ),
+        ).normalized()
+
     def _list_published_skills(self, tenant_id: str, agent_id: str | None = None) -> list[Skill]:
         return visible_published_skills(self.db, tenant_id, agent_id)
 
@@ -1632,6 +1678,7 @@ class AgentLoop:
         else:
             context = build_conversation_context(
                 entries,
+                settings=self._get_conversation_context_settings(chat_session.tenant_id),
                 context_state=chat_session.context_state_json,
                 summary_builder=(
                     self._context_summary_builder(model_config, chat_session.id)

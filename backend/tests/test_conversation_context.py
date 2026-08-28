@@ -16,6 +16,7 @@ from app.core.capability_manifest import _acp_capability_descriptors
 from app.core.conversation_context import (
     LONG_SUMMARY_PREFIX,
     MEDIUM_SUMMARY_PREFIX,
+    ConversationContextSettings,
     build_conversation_context,
 )
 from app.core.harness_agent import HarnessTaskAgent, _harness_actions_from_raw
@@ -925,4 +926,77 @@ def test_task_layer_acp_ops_export_gated_by_frame_kind(monkeypatch) -> None:
     )
     assert sop_result.loop_checkpoint["acp_ops"] == [
         {"compress": {"seq_start": 0, "seq_end": 1, "summary": "摘要"}}
+    ]
+def test_conversation_context_uses_runtime_compaction_settings() -> None:
+    messages = [
+        {
+            "id": f"message_{index}",
+            "role": "user" if index % 2 == 0 else "assistant",
+            "content": f"message {index} " + ("内容" * 80),
+        }
+        for index in range(12)
+    ]
+    summary_budgets: list[int] = []
+
+    def summarize(_label: str, source: str, budget: int) -> str:
+        summary_budgets.append(budget)
+        return source
+
+    settings = ConversationContextSettings(
+        token_budget=1_000,
+        compaction_trigger_ratio=0.20,
+        recent_round_limit=1,
+        long_summary_token_budget=160,
+        medium_summary_token_budget=180,
+        allowed_roles=frozenset({"user"}),
+        long_summary_prefix="长期上下文：",
+        medium_summary_prefix="近期上下文：",
+    )
+    context = build_conversation_context(
+        messages,
+        settings=settings,
+        summary_builder=summarize,
+    )
+
+    assert context["metadata"]["token_budget"] == 1_000
+    assert context["metadata"]["compaction_trigger_ratio"] == 0.20
+    assert context["metadata"]["compaction_trigger_tokens"] == 200
+    assert context["metadata"]["recent_round_limit"] == 1
+    assert context["metadata"]["long_summary_token_budget"] == 160
+    assert context["metadata"]["medium_summary_token_budget"] == 180
+    assert context["metadata"]["allowed_roles"] == ["user"]
+    assert context["metadata"]["long_summary_prefix"] == "长期上下文："
+    assert context["metadata"]["medium_summary_prefix"] == "近期上下文："
+    assert all(message["role"] == "user" for message in context["messages"])
+    assert context["messages"][0]["content"].startswith("长期上下文：")
+    assert context["messages"][1]["content"].startswith("近期上下文：")
+    assert summary_budgets == [180]
+
+
+def test_conversation_context_compacts_assistant_only_history() -> None:
+    context = build_conversation_context(
+        [
+            {
+                "id": f"assistant_{index}",
+                "role": "assistant",
+                "content": f"assistant message {index} " + ("内容" * 80),
+            }
+            for index in range(8)
+        ],
+        settings=ConversationContextSettings(
+            token_budget=600,
+            compaction_trigger_ratio=0.20,
+            recent_round_limit=2,
+            long_summary_token_budget=128,
+            medium_summary_token_budget=128,
+            allowed_roles=frozenset({"assistant"}),
+        ),
+    )
+
+    assert context["metadata"]["compacted_now"] is True
+    assert context["metadata"]["allowed_roles"] == ["assistant"]
+    assert context["context_state"]["summarized_through_message_id"] == "assistant_5"
+    assert [message["role"] for message in context["messages"][-2:]] == [
+        "assistant",
+        "assistant",
     ]

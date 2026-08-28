@@ -9,6 +9,7 @@ import type { EnterpriseAuthUser } from '@/auth';
 import type { UIConfigRead } from '@/types';
 
 import RuntimeSettingsPage from './RuntimeSettingsPage';
+import { validateContextSettings } from './RuntimeSettingsPage';
 
 const { toastMock } = vi.hoisted(() => ({
   toastMock: {
@@ -37,6 +38,14 @@ function makeUiConfig(overrides: Partial<UIConfigRead> = {}): UIConfigRead {
     show_tool_trace: true,
     reflection_max_rounds: 1,
     agent_loop_max_actions: 32,
+    context_token_budget: 32000,
+    context_compaction_trigger_ratio: 0.7,
+    context_recent_round_limit: 6,
+    context_long_summary_token_budget: 4000,
+    context_medium_summary_token_budget: 4000,
+    context_allowed_roles: ['user', 'assistant'],
+    context_long_summary_prefix: '历史的信息可以被总结为：',
+    context_medium_summary_prefix: '近期的历史信息总结为：',
     sandbox_enabled: false,
     harness_storage_path: '',
     effective_harness_storage_path: '',
@@ -318,5 +327,54 @@ describe('RuntimeSettingsPage 上下文压缩机制', () => {
     await waitFor(() => expect(toastMock.custom).toHaveBeenCalled());
     const puts = fetchMock.mock.calls.filter(([, init]) => init?.method === 'PUT');
     expect(puts).toHaveLength(0);
+  });
+});
+
+const validForm = {
+  show_thinking_trace: true,
+  show_skill_trace: true,
+  show_tool_trace: true,
+  reflection_max_rounds: '1',
+  agent_loop_max_actions: '32',
+  context_token_budget: '32000',
+  context_compaction_trigger_ratio: '0.70',
+  context_recent_round_limit: '6',
+  context_long_summary_token_budget: '4000',
+  context_medium_summary_token_budget: '4000',
+  context_allowed_roles: ['user', 'assistant'] as Array<'user' | 'assistant'>,
+  context_long_summary_prefix: '历史的信息可以被总结为：',
+  context_medium_summary_prefix: '近期的历史信息总结为：',
+  context_compression_mode: 'legacy' as const,
+  acp_model_context_limit: '128000',
+  acp_nudge_max_pct: '0.70',
+  acp_nudge_emergency_pct: '0.85',
+  acp_nudge_min_pct: '0.45',
+  sandbox_enabled: false,
+  harness_storage_path: '',
+  sandbox_network_mode: 'all' as const,
+  sandbox_allowed_domains: '',
+};
+
+describe('runtime context settings validation', () => {
+  it('accepts the default runtime settings', () => {
+    expect(validateContextSettings(validForm)).toBeNull();
+  });
+
+  it('rejects summary budgets larger than the context budget', () => {
+    expect(validateContextSettings({
+      ...validForm,
+      context_token_budget: '7000',
+    })).toBe('长期与近期摘要预算之和不能超过上下文预算');
+  });
+
+  it('requires at least one history role and both summary prefixes', () => {
+    expect(validateContextSettings({
+      ...validForm,
+      context_allowed_roles: [],
+    })).toBe('至少保留一种历史消息角色');
+    expect(validateContextSettings({
+      ...validForm,
+      context_medium_summary_prefix: '   ',
+    })).toBe('摘要前缀不能为空');
   });
 });
